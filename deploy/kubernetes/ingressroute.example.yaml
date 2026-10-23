@@ -1,0 +1,16 @@
+# Example: expose the UI through Traefik (not part of the kustomization; adjust host/entrypoints).
+# Only the web port is routed; the API port stays inside the pod. Add a middleware (basic/forward auth)
+# here: it protects the UI, the event stream AND the Try-it proxies, which are same-origin paths.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: swagger-aggregator
+  namespace: swagger-aggregator
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`docs.k8s.example.test`)
+      kind: Rule
+      # middlewares: [{name: auth}]
+      services: [{name: swagger-aggregator, port: 80}]
+  tls: {}

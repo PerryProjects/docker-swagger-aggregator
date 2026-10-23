@@ -1,0 +1,39 @@
+# Run behind an existing Traefik that shares an external Docker network with your APIs:
+#
+#   TRAEFIK_NETWORK=proxy AGGREGATOR_HOST=docs.example.com \
+#     docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+#
+# Only `web` is routed; the API is never published. Your own services need
+# `swagger-aggregator.enable=true` (+ labels) and must be on the same network as the API.
+services:
+  api:
+    environment:
+      SWAGGER_AGGREGATOR_NETWORK: ${TRAEFIK_NETWORK:-traefik}
+      # Derive server-url from `Host(`x`)` + tls router labels when no explicit label is set.
+      SWAGGER_AGGREGATOR_DERIVE_SERVER_URL: "true"
+    networks: [docker-api, traefik, frontend]
+
+  web:
+    networks: [frontend, traefik]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
+      - traefik.http.routers.swagger-aggregator.rule=Host(`${AGGREGATOR_HOST:?set AGGREGATOR_HOST}`)
+      - traefik.http.routers.swagger-aggregator.entrypoints=websecure
+      - traefik.http.routers.swagger-aggregator.tls=true
+      # - traefik.http.routers.swagger-aggregator.tls.certresolver=letsencrypt
+      - traefik.http.services.swagger-aggregator.loadbalancer.server.port=3000
+      # Optional: protect the UI and the "Try it" proxy (define the middleware elsewhere, e.g. basic auth / forward auth):
+      # - traefik.http.routers.swagger-aggregator.middlewares=swagger-aggregator-auth
+      # - traefik.http.middlewares.swagger-aggregator-auth.basicauth.users=admin:$$apr1$$REPLACE_WITH_htpasswd_HASH
+
+  # Demo services join Traefik's network too, because the API reaches them there.
+  orders:
+    networks: [services, traefik]
+  inventory:
+    networks: [services, traefik]
+
+networks:
+  traefik:
+    name: ${TRAEFIK_NETWORK:-traefik}
+    external: true

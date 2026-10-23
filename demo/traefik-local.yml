@@ -1,0 +1,50 @@
+# Local Traefik for trying docker-compose.traefik.yml (not for production):
+#
+#   docker network create sa-traefik-net
+#   export TRAEFIK_NETWORK=sa-traefik-net AGGREGATOR_HOST=docs.example.test
+#   docker compose -p sa-traefik -f docker-compose.yml -f docker-compose.traefik.yml -f demo/traefik-local.yml up -d --build
+#
+# HTTPS is served on 127.0.0.1:18443 with Traefik's self-signed default certificate. Map the names
+# to loopback, e.g. `curl -k --resolve docs.example.test:18443:127.0.0.1 https://docs.example.test:18443/`.
+services:
+  traefik-socket-proxy: # Traefik gets its own, wider socket proxy than the aggregator
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      INFO: 1
+      NETWORKS: 1
+      SERVICES: 1
+      TASKS: 1
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [traefik-docker]
+
+  traefik:
+    image: traefik:v3
+    command:
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.websecure.address=:443
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      - "127.0.0.1:18443:443"
+    depends_on: [traefik-socket-proxy]
+    networks: [traefik-docker, traefik]
+
+  # orders: no server-url label -> derived from these Traefik labels (--traefik-server-url)
+  orders:
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      traefik.http.routers.orders.rule: Host(`orders.example.test`)
+      traefik.http.routers.orders.entrypoints: websecure
+      traefik.http.routers.orders.tls: "true"
+      traefik.http.services.orders.loadbalancer.server.port: "8000"
+
+networks:
+  traefik-docker:
+    internal: true

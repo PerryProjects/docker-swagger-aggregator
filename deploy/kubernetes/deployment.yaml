@@ -1,0 +1,60 @@
+# One pod, two containers: the API (discovery, spec proxy, SSE) and the web server (UI + /api forwarder).
+# They talk over localhost, so nothing but the web port needs a Service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: swagger-aggregator
+spec:
+  replicas: 1 # state is in memory; every replica rebuilds it from the cluster
+  selector:
+    matchLabels: {app.kubernetes.io/name: swagger-aggregator}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: swagger-aggregator}
+    spec:
+      serviceAccountName: swagger-aggregator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: swagger-aggregator:local # build/push your own image and replace this
+          imagePullPolicy: IfNotPresent
+          args:
+            - --docker=false
+            - --kubernetes
+            - --kube-access=service
+            - --derive-server-url
+            - --log-format=json
+          ports: [{name: api, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: api}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /healthz, port: api}, periodSeconds: 15}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext: &hardened
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+        - name: web
+          image: swagger-aggregator:local
+          imagePullPolicy: IfNotPresent
+          command: [/swagger-aggregator-web]
+          env:
+            - {name: SWAGGER_AGGREGATOR_WEB_DIR, value: /web/dist}
+            - {name: SWAGGER_AGGREGATOR_WEB_API, value: "http://127.0.0.1:8080"}
+          ports: [{name: http, containerPort: 3000}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 15}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 128Mi}
+          securityContext: *hardened
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: swagger-aggregator
+spec:
+  selector: {app.kubernetes.io/name: swagger-aggregator}
+  ports: [{name: http, port: 80, targetPort: http}]

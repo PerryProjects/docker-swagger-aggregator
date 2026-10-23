@@ -1,0 +1,109 @@
+# Path-based Traefik routing, to see how public URLs with a path prefix behave:
+#   kubectl apply -f demo/kubernetes-paths.yaml
+# One pod answers /items (root) and /api/items (under a prefix); every route below reaches a different one.
+#   /strip/...   Traefik strips "/strip"  -> container /items         (the aggregator's default assumption)
+#   /api/...     Traefik keeps "/api"     -> container /api/items     (needs the annotation strip-prefix: "false")
+#   /derived/... stripped, no annotation  -> public URL NOT derived (path prefixes are ambiguous), Try-it uses the same-origin proxy
+apiVersion: v1
+kind: Namespace
+metadata: {name: paths}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: spec, namespace: paths}
+data:
+  openapi.json: |
+    {"openapi":"3.0.3","info":{"title":"Paths demo","version":"1"},"servers":[{"url":"http://paths.paths.svc:8080"}],
+     "paths":{"/items":{"get":{"summary":"List items","responses":{"200":{"description":"OK"}}}}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paths, namespace: paths}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: paths}}
+  template:
+    metadata: {labels: {app: paths}}
+    spec:
+      containers:
+        - name: httpd
+          image: busybox:1.37
+          command: [sh, -c, "mkdir -p /www/api && cp /spec/openapi.json /www/openapi.json && echo ROOT-ITEMS > /www/items && echo API-ITEMS > /www/api/items && exec httpd -f -p 8000 -h /www"]
+          ports: [{containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /openapi.json, port: 8000}, periodSeconds: 2}
+          volumeMounts: [{name: spec, mountPath: /spec}]
+      volumes: [{name: spec, configMap: {name: spec}}]
+---
+# three Services over the same pod, one per routing style
+apiVersion: v1
+kind: Service
+metadata:
+  name: strip
+  namespace: paths
+  labels: {swagger-aggregator.enable: "true"}
+  annotations: {swagger-aggregator.server-url: "https://paths.k8s.example.test/strip"}
+spec: {selector: {app: paths}, ports: [{name: http, port: 8080, targetPort: 8000}]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keep
+  namespace: paths
+  labels: {swagger-aggregator.enable: "true"}
+  annotations:
+    swagger-aggregator.server-url: "https://paths.k8s.example.test/api"
+    swagger-aggregator.strip-prefix: "false" # Traefik keeps /api, so the container itself serves /api/...
+spec: {selector: {app: paths}, ports: [{name: http, port: 8080, targetPort: 8000}]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: derived
+  namespace: paths
+  labels: {swagger-aggregator.enable: "true"}
+spec: {selector: {app: paths}, ports: [{name: http, port: 8080, targetPort: 8000}]}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: {name: strip-strip, namespace: paths}
+spec: {stripPrefix: {prefixes: [/strip]}}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: {name: strip-derived, namespace: paths}
+spec: {stripPrefix: {prefixes: [/derived]}}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: {name: strip, namespace: paths}
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`paths.k8s.example.test`) && PathPrefix(`/strip`)
+      kind: Rule
+      middlewares: [{name: strip-strip}]
+      services: [{name: strip, port: 8080}]
+  tls: {}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: {name: keep, namespace: paths}
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`paths.k8s.example.test`) && PathPrefix(`/api`)
+      kind: Rule
+      services: [{name: keep, port: 8080}]
+  tls: {}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: {name: derived, namespace: paths}
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`paths.k8s.example.test`) && PathPrefix(`/derived`)
+      kind: Rule
+      middlewares: [{name: strip-derived}]
+      services: [{name: derived, port: 8080}]
+  tls: {}

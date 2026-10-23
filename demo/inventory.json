@@ -1,0 +1,12 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Inventory (demo)", "version": "1.0.0", "description": "Swagger 2.0 demo service WITHOUT a HEALTHCHECK, custom path and server-url." },
+  "host": "inventory:8000",
+  "basePath": "/",
+  "schemes": ["http"],
+  "paths": {
+    "/items": {
+      "get": { "summary": "List items", "tags": ["items"], "produces": ["application/json"], "responses": { "200": { "description": "OK" } } }
+    }
+  }
+}

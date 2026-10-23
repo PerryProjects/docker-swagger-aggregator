@@ -1,0 +1,105 @@
+# Local demo: `docker compose up --build`, then open http://localhost:8080
+# (the published port comes from docker-compose.override.yml, which compose loads automatically).
+# With Traefik: docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+#
+# Networks:
+#   docker-api  internal, only the API and the socket proxy (no outbound access)
+#   services    the API reaches the documented services over this one (named swagger-aggregator)
+#   frontend    web server <-> API
+name: swagger-aggregator
+
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest # pin a version/digest in production
+    environment:
+      CONTAINERS: 1 # list + inspect (read-only; POST stays at its default 0)
+      EVENTS: 1
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-api]
+    restart: unless-stopped
+
+  # API: discovery, spec proxy, SSE. Not published; only the web server talks to it.
+  api:
+    build: .
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+      SWAGGER_AGGREGATOR_NETWORK: swagger-aggregator
+    depends_on: [socket-proxy]
+    networks: [docker-api, services, frontend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/swagger-aggregator", "healthcheck"]
+      interval: 10s
+      timeout: 4s
+      retries: 3
+    # Static binary, writes nothing: lock it down.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 200
+
+  # Web: serves the built UI and forwards /api to the API.
+  web:
+    build: .
+    entrypoint: ["/swagger-aggregator-web"]
+    environment:
+      SWAGGER_AGGREGATOR_WEB_DIR: /web/dist
+      SWAGGER_AGGREGATOR_WEB_API: http://api:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [frontend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/swagger-aggregator-web", "healthcheck"]
+      interval: 10s
+      timeout: 4s
+      retries: 3
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 100
+
+  # Demo 1: OpenAPI 3, WITH a HEALTHCHECK, defaults for everything else.
+  orders:
+    image: busybox:1.37
+    command: httpd -f -p 8000 -h /srv
+    volumes:
+      - ./demo/orders.json:/srv/openapi.json:ro
+      - ./demo/orders-list.json:/srv/orders:ro
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/openapi.json"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 2s
+    labels:
+      swagger-aggregator.enable: "true"
+    networks: [services]
+
+  # Demo 2: Swagger 2.0, NO healthcheck, non-default path, name and server-url.
+  inventory:
+    image: busybox:1.37
+    command: httpd -f -p 8000 -h /srv
+    volumes:
+      - ./demo/inventory.json:/srv/swagger.json:ro
+      - ./demo/inventory-items.json:/srv/items:ro
+    expose: ["8000"]
+    labels:
+      swagger-aggregator.enable: "true"
+      swagger-aggregator.path: /swagger.json
+      swagger-aggregator.name: Inventory
+      swagger-aggregator.server-url: http://localhost:9000/inventory
+    networks: [services]
+
+networks:
+  docker-api:
+    internal: true
+  services:
+    name: swagger-aggregator
+  frontend:

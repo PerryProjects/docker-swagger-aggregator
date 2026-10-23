@@ -1,0 +1,39 @@
+# Read-only access to exactly what the Kubernetes source watches.
+# Cluster-wide; to restrict to some namespaces use a Role + RoleBinding per namespace instead of the
+# ClusterRole(Binding) and pass --namespace for each one.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: swagger-aggregator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: swagger-aggregator
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  # Traefik IngressRoute (only used with --derive-server-url; the CRD is optional)
+  - apiGroups: ["traefik.io"]
+    resources: ["ingressroutes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: swagger-aggregator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: swagger-aggregator
+subjects:
+  - kind: ServiceAccount
+    name: swagger-aggregator
+    namespace: swagger-aggregator
