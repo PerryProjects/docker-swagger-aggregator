@@ -3,12 +3,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/perryprojects/docker-swagger-aggregator/internal/auth"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/logging"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/server"
+	"github.com/perryprojects/docker-swagger-aggregator/internal/store"
 )
 
 const (
@@ -27,6 +31,7 @@ const (
 	defaultListen     = ":3000"
 	authNone          = "none"
 	authOIDC          = "oidc"
+	authBuiltIn       = "build_in"
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 5 * time.Second
 )
@@ -55,7 +60,12 @@ func newCmd() *cobra.Command {
 	f.String("dir", "web/dist", "directory with the built UI")
 	f.String("api", "http://localhost:8080", "base URL of the swagger-aggregator API")
 	f.String("base-path", "", "public path prefix the UI is served under, e.g. /docs (default: served at /)")
-	f.String("auth", authNone, "authentication: none or oidc (login with any OpenID Connect provider, e.g. Authelia)")
+	f.String("auth", authNone, "authentication: none, build_in (own login form + users in SQLite) or oidc (e.g. Authelia)")
+	f.String("data-dir", "data", "directory for the user database and the session key (auth=build_in)")
+	f.String("admin-user", "", "build_in: create this admin on first start (instead of the setup page)")
+	f.String("admin-password", "", "build_in: password of --admin-user (>= 10 characters; use the environment variable)")
+	f.String("admin-password-hash", "", "build_in: bcrypt hash of the admin password, instead of --admin-password")
+	f.String("setup-token", "", "build_in: token for registering the first admin on the setup page (default: random, printed in the log)")
 	f.String("oidc-issuer", "", "OIDC issuer URL (auth=oidc), e.g. https://auth.example.com")
 	f.String("oidc-client-id", "", "OIDC client id (auth=oidc)")
 	f.String("oidc-client-secret", "", "OIDC client secret (auth=oidc; prefer the environment variable)")
@@ -64,7 +74,7 @@ func newCmd() *cobra.Command {
 	f.String("oidc-groups-claim", "groups", "claim that lists the user's groups")
 	f.StringSlice("oidc-allowed-groups", nil, "only users in one of these groups may sign in (default: every authenticated user)")
 	f.StringSlice("oidc-allowed-emails", nil, "only these (verified) e-mail addresses may sign in (alternative to groups)")
-	f.String("session-secret", "", "secret that signs and encrypts the session cookie, >= 32 characters (auth=oidc; use the environment variable)")
+	f.String("session-secret", "", "secret that signs and encrypts the session cookie, >= 32 characters (oidc: required; build_in: default is a key file in --data-dir)")
 	f.Duration("session-ttl", 8*time.Hour, "how long a login lasts (auth=oidc)")
 	f.String("log-level", "info", "debug, info, warn or error")
 	f.String("log-format", logging.FormatConsole, "console (human readable) or json (for log collectors)")
@@ -112,10 +122,11 @@ func run(parent context.Context, v *viper.Viper) error {
 		return fmt.Errorf("invalid --base-path %q (want e.g. /docs)", v.GetString("base-path"))
 	}
 
-	protect, err := authMiddleware(v, base, log)
+	protect, closeAuth, err := authMiddleware(parent, v, base, log)
 	if err != nil {
 		return err
 	}
+	defer closeAuth()
 
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -141,14 +152,21 @@ func run(parent context.Context, v *viper.Viper) error {
 	return nil
 }
 
-// authMiddleware builds the login protection selected by --auth; nil means unprotected.
-func authMiddleware(v *viper.Viper, base string, log *zap.Logger) (func(http.Handler) http.Handler, error) {
+// authMiddleware builds the login protection selected by --auth; nil means unprotected. The returned func
+// releases what it opened (the database).
+func authMiddleware(
+	ctx context.Context,
+	v *viper.Viper,
+	base string,
+	log *zap.Logger,
+) (func(http.Handler) http.Handler, func(), error) {
+	noop := func() {}
 	switch mode := v.GetString("auth"); mode {
 	case "", authNone:
-		if v.GetString("oidc-issuer") != "" || v.GetString("oidc-client-id") != "" {
-			log.Warn("oidc settings are ignored because --auth is none: the UI and API are NOT protected")
+		if v.GetString("oidc-issuer") != "" || v.GetString("oidc-client-id") != "" || v.GetString("admin-user") != "" {
+			log.Warn("auth settings are ignored because --auth is none: the UI and API are NOT protected")
 		}
-		return nil, nil
+		return nil, noop, nil
 	case authOIDC:
 		o, err := auth.New(auth.Config{
 			Issuer:        v.GetString("oidc-issuer"),
@@ -164,13 +182,69 @@ func authMiddleware(v *viper.Viper, base string, log *zap.Logger) (func(http.Han
 			AllowedEmails: splitList(v.GetStringSlice("oidc-allowed-emails")),
 		}, log)
 		if err != nil {
-			return nil, fmt.Errorf("--auth=oidc: %w", err)
+			return nil, noop, fmt.Errorf("--auth=oidc: %w", err)
 		}
 		log.Info("authentication enabled", zap.String("mode", mode), zap.String("issuer", v.GetString("oidc-issuer")))
-		return o.Wrap, nil
+		return o.Wrap, noop, nil
+	case authBuiltIn:
+		return builtInAuth(ctx, v, base, log)
 	default:
-		return nil, fmt.Errorf("invalid --auth %q (none or oidc)", mode)
+		return nil, noop, fmt.Errorf("invalid --auth %q (none, build_in or oidc)", mode)
 	}
+}
+
+func builtInAuth(
+	ctx context.Context,
+	v *viper.Viper,
+	base string,
+	log *zap.Logger,
+) (func(http.Handler) http.Handler, func(), error) {
+	noop := func() {}
+	dir := v.GetString("data-dir")
+	db, err := store.Open(ctx, dir)
+	if err != nil {
+		return nil, noop, fmt.Errorf("--auth=build_in: %w (is %q writable?)", err, dir)
+	}
+	closer := func() { _ = db.Close() }
+	secret := v.GetString("session-secret")
+	if secret == "" {
+		if secret, err = sessionKey(dir); err != nil {
+			closer()
+			return nil, noop, fmt.Errorf("--auth=build_in: session key: %w", err)
+		}
+	}
+	l, err := auth.NewLocal(auth.LocalConfig{
+		Store:         db,
+		SessionSecret: secret,
+		BasePath:      base,
+		SessionTTL:    v.GetDuration("session-ttl"),
+		SetupToken:    v.GetString("setup-token"),
+	}, log)
+	if err != nil {
+		closer()
+		return nil, noop, fmt.Errorf("--auth=build_in: %w", err)
+	}
+	if err = l.Bootstrap(ctx, v.GetString("admin-user"), v.GetString("admin-password"), v.GetString("admin-password-hash")); err != nil {
+		closer()
+		return nil, noop, fmt.Errorf("--auth=build_in: %w", err)
+	}
+	log.Info("authentication enabled", zap.String("mode", authBuiltIn), zap.String("dataDir", dir))
+	return l.Wrap, closer, nil
+}
+
+// sessionKey returns the cookie secret kept in <dir>/session.key, creating it on first use, so that logins
+// survive a restart without anybody having to invent a secret.
+func sessionKey(dir string) (string, error) {
+	path := filepath.Join(dir, "session.key")
+	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
+		return strings.TrimSpace(string(b)), nil
+	}
+	raw := make([]byte, 48)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	key := base64.RawURLEncoding.EncodeToString(raw)
+	return key, os.WriteFile(path, []byte(key+"\n"), 0o600)
 }
 
 // splitList accepts repeated flags and comma separated values.

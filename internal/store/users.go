@@ -135,3 +135,23 @@ func ensureOtherAdmin(tx *gorm.DB, u *User) error {
 	}
 	return nil
 }
+
+// ErrNotEmpty is returned by CreateFirstUser when a user exists already.
+var ErrNotEmpty = errors.New("a user exists already")
+
+// CreateFirstUser adds the user only if the table is empty, atomically: of two concurrent setups exactly
+// one wins.
+func (s *Store) CreateFirstUser(ctx context.Context, username, passwordHash, role string) (User, error) {
+	u := User{Username: strings.ToLower(username), PasswordHash: passwordHash, Role: role}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&User{}).Count(&n).Error; err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrNotEmpty
+		}
+		return tx.Create(&u).Error
+	})
+	return u, err
+}
