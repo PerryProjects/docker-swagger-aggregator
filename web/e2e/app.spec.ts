@@ -146,6 +146,19 @@ test('the documentation has a navigation to the other pages', async ({ page }) =
   await expect(nav.getByRole('link', { name: 'Users' })).toHaveCount(0) // auth=none has no users
 })
 
+// These run against `vite preview` and the mock API, i.e. without the Go web server: the UI does not need it.
+test('the API page shows the own API incl. the event stream and MCP, served by Vite alone', async ({ page }) => {
+  await page.goto('/api-docs')
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator HTTP API' })).toBeVisible()
+  const sidebar = page.getByRole('complementary')
+  await expect(sidebar.getByText('Events', { exact: true })).toBeVisible()
+  await expect(sidebar.getByText('MCP', { exact: true })).toBeVisible()
+  await expect(page.getByText('AsyncAPI')).toHaveCount(0) // one document, no switcher
+  const res = await page.request.get('/spec/openapi.json')
+  expect(res.status()).toBe(200)
+  expect(Object.keys((await res.json()).paths)).toEqual(expect.arrayContaining(['/api/events', '/mcp']))
+})
+
 test('the documentation view loads no PrimeVue or Tailwind styles', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText('🟢 alpha').first()).toBeVisible()

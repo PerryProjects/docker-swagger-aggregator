@@ -151,7 +151,7 @@ an "Open docs" link. It updates live over the same SSE stream. The docs sidebar 
 | `ANY /api/proxy/{containerID}/{path...}` | same-origin reverse proxy to that container (used by "Try it", see below) |
 | `ANY /api/scalar-proxy?scalar_url=…` | Scalar's `proxyUrl` endpoint: forwards a public URL below a registered service's `server-url` to that container |
 | `GET /healthz` | `ok` |
-| `GET /spec/{openapi,asyncapi}.{json,yaml}` | this interface as OpenAPI 3.1 and AsyncAPI 3.1, see [Build your own frontend](#build-your-own-frontend); `/auth/*` is the built-in login |
+| `GET /spec/openapi.{json,yaml}` | this interface as OpenAPI 3.1 (REST, the SSE events, MCP), see [Build your own frontend](#build-your-own-frontend); `/auth/*` is the built-in login |
 
 `lastSeen` is the last successful fetch. Changes that only move `lastSeen` do not emit an SSE event.
 YAML specs are accepted and served as JSON.
@@ -159,11 +159,11 @@ YAML specs are accepted and served as JSON.
 ## Build your own frontend
 
 The UI that ships with this program is only one client of an HTTP interface that is documented in the program itself:
-the **API** page (`/api-docs`) shows it with Scalar, as two documents: the REST endpoints as **OpenAPI 3.1** and the live
-event stream as **AsyncAPI 3.1**. Both are also served as plain files for code generators and your own tooling:
-`/spec/openapi.json`, `/spec/openapi.yaml`, `/spec/asyncapi.json`, `/spec/asyncapi.yaml` (public, like `/healthz`). The sources are
-[`internal/apidocs/openapi.yaml`](internal/apidocs/openapi.yaml) and [`asyncapi.yaml`](internal/apidocs/asyncapi.yaml); tests check them against the code
-(the schemas against the structs and real responses, every documented operation against the real handlers).
+the **API** page (`/api-docs`) shows it with Scalar, as one OpenAPI 3.1 document: the REST endpoints, the live event
+stream (every Server-Sent Event, with the wire format and a browser example) and the MCP endpoint (JSON-RPC, tools, examples). It is also
+served as a plain file for code generators and your own tooling: `/spec/openapi.json` and `/spec/openapi.yaml` (public, like
+`/healthz`). The source is [`internal/apidocs/openapi.yaml`](internal/apidocs/openapi.yaml); tests check it against the code (the schemas against
+the structs and real responses, every documented operation against the real handlers, the MCP section against the real `/mcp`).
 
 ```js
 const services = await (await fetch('/api/services')).json()                    // [{name, status, specHash, ...}]
@@ -316,9 +316,12 @@ go run ./cmd/swagger-aggregator --listen :8080
 # Publish the containers' ports (ports: ["127.0.0.1::8000"]) and add --prefer-published-ports,
 # or run the API in a container on the same network (the compose setup does that).
 
-# frontend with hot reload (bun); /api (incl. SSE) is proxied to the backend
-cd web && bun install && bun run dev      # http://localhost:5173
+# frontend with hot reload (bun) - no Go web server needed: Vite serves the UI and proxies /api (incl. SSE), /auth and /mcp
+# to the backend; /spec/openapi.* (the API page) is read from internal/apidocs/openapi.yaml by a Vite plugin
+cd web && bun install && bun run dev      # http://localhost:5173, backend http://localhost:8080 = the API server
 # other backend address: SWAGGER_AGGREGATOR_BACKEND=http://host:port bun run dev
+# with auth=none the API server alone is enough; to try the login (auth=build_in/oidc) or MCP, point the backend at the
+# Go web server (swagger-aggregator-web), which answers /auth and /mcp
 
 # production mode: build the UI, then serve it with the Go web server
 cd web && bun install --frozen-lockfile && bun run build && cd ..   # `bun run bundle` = vite only, no typecheck
