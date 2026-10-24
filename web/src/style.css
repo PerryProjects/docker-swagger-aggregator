@@ -1,0 +1,7 @@
+/* Tailwind + PrimeVue. Loaded only by the shell (login, status, users): the Scalar documentation view must
+   not get Tailwind's global reset. The layer order lets PrimeVue's theme sit between Tailwind's base and
+   its utilities, so utility classes can still override a component. */
+@layer theme, base, primevue;
+@import "tailwindcss";
+@import "tailwindcss-primeui";
+@import "primeicons/primeicons.css";

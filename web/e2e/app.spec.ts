@@ -129,36 +129,51 @@ test('a service that never delivered a spec is listed with its problem, not hidd
   await expect(page.getByRole('complementary', { name: 'Sidebar for alpha API' })).toBeVisible() // the documented service is unaffected
 })
 
+// The status page is a PrimeVue DataTable: a row is found through the marker inside its first cell.
+const row = (page: Page, name: string) => page.locator('tr', { has: page.locator(`[data-service="${name}"]`) })
+const expectSummary = async (page: Page, up: number, down: number) => {
+  const summary = page.getByRole('status')
+  await expect(summary).toContainText(`${up} up`)
+  await expect(summary).toContainText(`${down} down`)
+}
+
+test('the documentation view loads no PrimeVue or Tailwind styles', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByText('🟢 alpha').first()).toBeVisible()
+  await expect(page.locator('style[data-primevue-style-id]')).toHaveCount(0)
+  expect(await page.evaluate(() => getComputedStyle(document.body).margin)).toBe('0px')
+})
+
 test.describe('status page', () => {
   const broken: Svc = { name: 'ghost', status: 'down', noSpec: true, error: 'container is not attached to network "swagger-aggregator"' }
 
   test('lists every service, including one without a spec, with its problem', async ({ page }) => {
     await set([alpha, { ...bravo, status: 'down' }, broken])
     await page.goto('/status')
-    await expect(page.getByRole('status').filter({ hasText: '1 up / 2 down' })).toBeVisible()
+    await expectSummary(page, 1, 2)
 
-    const ghost = page.locator('tr[data-service="ghost"]')
+    const ghost = row(page, 'ghost')
     await expect(ghost).toContainText('down') // text, not only a color
     await expect(ghost).toContainText('not attached to network')
     await expect(ghost).toContainText('never')
     await expect(ghost.getByRole('link', { name: 'Open docs' })).toHaveCount(0) // nothing to open
 
-    await expect(page.locator('tr[data-service="bravo"]')).toContainText('down')
-    await expect(page.locator('tr[data-service="alpha"]')).toContainText('up')
-    await expect(page.locator('tr[data-service="alpha"]')).toContainText('now') // up services are "now", not a stale time
+    await expect(row(page, 'bravo')).toContainText('down')
+    await expect(row(page, 'alpha')).toContainText('up')
+    await expect(row(page, 'alpha')).toContainText('now') // up services are "now", not a stale time
   })
 
   test('updates live when a service changes', async ({ page }) => {
     await page.goto('/status')
-    await expect(page.getByRole('status').filter({ hasText: '3 up / 0 down' })).toBeVisible()
+    await expectSummary(page, 3, 0)
     await set([alpha, { ...bravo, status: 'down', error: 'unexpected status 503 Service Unavailable' }, charlie])
-    await expect(page.locator('tr[data-service="bravo"]')).toContainText('503')
-    await expect(page.getByRole('status').filter({ hasText: '2 up / 1 down' })).toBeVisible()
+    await expect(row(page, 'bravo')).toContainText('503')
+    await expectSummary(page, 2, 1)
   })
 
   test('"Open docs" opens that document, and the docs link back to the status page', async ({ page }) => {
     await page.goto('/status')
-    await page.locator('tr[data-service="bravo"]').getByRole('link', { name: 'Open docs' }).click()
+    await row(page, 'bravo').getByRole('link', { name: 'Open docs' }).click()
     await expect(page.getByText('🟢 bravo').first()).toBeVisible()
     await expect.poll(() => page.url()).toContain('#bravo')
 

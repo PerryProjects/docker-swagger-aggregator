@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref } from 'vue'
+import Column from 'primevue/column'
+import DataTable from 'primevue/datatable'
+import Message from 'primevue/message'
+import Tag from 'primevue/tag'
 import { BASE } from '../base'
 import { useServices } from '../composables/useServices'
 import { assignSlugs, compareServices } from '../slug'
@@ -29,51 +33,43 @@ function ago(iso?: string): string {
 </script>
 
 <template>
-  <main class="status">
-    <header>
-      <h1>Service status</h1>
-      <a :href="BASE">Documentation</a>
+  <main class="mx-auto max-w-6xl p-4 sm:p-6">
+    <header class="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <h1 class="text-2xl font-semibold">Service status</h1>
+      <div v-if="loaded && services.length" class="flex gap-2" role="status">
+        <Tag severity="success" icon="pi pi-check-circle" :value="`${up} up`" />
+        <Tag :severity="down ? 'danger' : 'secondary'" icon="pi pi-times-circle" :value="`${down} down`" />
+      </div>
     </header>
 
-    <p v-if="!loaded" role="status">Loading…</p>
-    <p v-else-if="!services.length" role="status">No services discovered yet.</p>
-    <template v-else>
-      <p class="summary" role="status">{{ up }} up / {{ down }} down</p>
-      <table>
-        <thead>
-          <tr><th>Service</th><th>Status</th><th>Last seen</th><th>Problem</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in sorted" :key="s.name" :data-service="s.name">
-            <td>{{ s.group ? `${s.group} / ` : '' }}{{ s.name }}</td>
-            <td :class="s.status"><span aria-hidden="true">{{ s.status === 'up' ? '🟢' : '🔴' }}</span> {{ s.status }}</td>
-            <td>{{ s.status === 'up' ? 'now' : ago(s.lastSeen) }}</td>
-            <td class="problem">{{ s.error ?? '' }}</td>
-            <td><a v-if="s.specHash" :href="`${BASE}#${slugs.get(s.name)}`">Open docs</a></td>
-          </tr>
-        </tbody>
-      </table>
-    </template>
+    <Message v-if="!loaded" severity="secondary" role="status">Loading…</Message>
+    <Message v-else-if="!services.length" severity="info" role="status">No services discovered yet.</Message>
+    <DataTable v-else :value="sorted" data-key="name" size="small" striped-rows>
+      <Column header="Service">
+        <template #body="{ data }">
+          <span :data-service="data.name" class="font-medium">{{ data.group ? `${data.group} / ` : '' }}{{ data.name }}</span>
+        </template>
+      </Column>
+      <Column header="Status">
+        <template #body="{ data }">
+          <Tag
+            :severity="data.status === 'up' ? 'success' : 'danger'"
+            :icon="data.status === 'up' ? 'pi pi-check-circle' : 'pi pi-times-circle'"
+            :value="data.status"
+          />
+        </template>
+      </Column>
+      <Column header="Last seen" class="hidden sm:table-cell">
+        <template #body="{ data }">{{ data.status === 'up' ? 'now' : ago(data.lastSeen) }}</template>
+      </Column>
+      <Column header="Problem">
+        <template #body="{ data }"><span class="break-words text-muted-color">{{ data.error ?? '' }}</span></template>
+      </Column>
+      <Column header="">
+        <template #body="{ data }">
+          <a v-if="data.specHash" :href="`${BASE}#${slugs.get(data.name)}`" class="text-primary hover:underline">Open docs</a>
+        </template>
+      </Column>
+    </DataTable>
   </main>
 </template>
-
-<style scoped>
-.status {
-  --fg: #1b1b1b; --muted: #6d6d6d; --line: #0000001a; --bg: #f9f9f9; --link: #0071bb;
-  font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg);
-  min-height: 100%; box-sizing: border-box; padding: 1.5rem clamp(1rem, 4vw, 3rem);
-}
-@media (prefers-color-scheme: dark) {
-  .status { --fg: #ffffffe6; --muted: #ffffff9e; --line: #ffffff22; --bg: #131313; --link: #4eb3ec; }
-}
-header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
-h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-a { color: var(--link); }
-.summary { color: var(--muted); }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
-.problem { color: var(--muted); overflow-wrap: anywhere; }
-.down { font-weight: 600; }
-@media (max-width: 640px) { th:nth-child(3), td:nth-child(3) { display: none; } }
-</style>

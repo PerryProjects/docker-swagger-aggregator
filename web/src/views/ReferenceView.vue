@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { BASE } from '../base'
 import { useServices } from '../composables/useServices'
+import { useSession } from '../composables/useSession'
 import { assignSlugs, compareServices } from '../slug'
 
 // Scalar is ~1.5 MB: load it only once there is something to show.
@@ -14,6 +15,7 @@ const ApiReference = defineAsyncComponent(async () => {
 })
 
 const { services, loaded } = useServices()
+const { session, logout } = useSession()
 
 // Per-viewer convenience only; the view works without storage.
 const HIDE_KEY = 'swagger-aggregator.hideOffline'
@@ -87,6 +89,10 @@ const withoutSpec = computed(() => services.value.filter((s) => !s.specHash).sor
         </li>
       </ul>
       <a class="toggle" :href="`${BASE}status`">Service status</a>
+      <template v-if="session?.mode === 'build_in' && session.user">
+        <a v-if="session.user.role === 'admin'" class="toggle" :href="`${BASE}users`">Users</a>
+        <button class="toggle signout" type="button" @click="logout">Sign out ({{ session.user.username }})</button>
+      </template>
     </template>
   </ApiReference>
   <div v-else class="empty">
@@ -104,11 +110,16 @@ const withoutSpec = computed(() => services.value.filter((s) => !s.specHash).sor
       </li>
     </ul>
     <a class="toggle" :href="`${BASE}status`">Service status</a>
+    <template v-if="session?.mode === 'build_in' && session.user">
+      <a v-if="session.user.role === 'admin'" class="toggle" :href="`${BASE}users`">Users</a>
+      <button class="toggle signout" type="button" @click="logout">Sign out ({{ session.user.username }})</button>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .nospec { list-style: none; margin: 0; padding: 0.5rem 1rem; font: 13px system-ui, sans-serif; color: #666; overflow-wrap: anywhere; }
 .empty { font-family: system-ui, sans-serif; color: #666; text-align: center; margin-top: 20vh; }
+.signout { background: none; border: 0; width: 100%; color: inherit; }
 .toggle { display: flex; gap: 0.5rem; align-items: center; justify-content: center; padding: 0.5rem 1rem; font: 13px system-ui, sans-serif; cursor: pointer; }
 </style>

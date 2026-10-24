@@ -38,8 +38,20 @@ vulncheck:
   script:
     - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+web-binary: # the e2e tests of the built-in auth run the real Go web server; the Playwright image has no Go
+  stage: test
+  image: golang:1.27
+  script:
+    - CGO_ENABLED=0 go build -o bin/swagger-aggregator-web ./cmd/swagger-aggregator-web
+  artifacts:
+    paths: [bin/swagger-aggregator-web]
+    expire_in: 1 hour
+
 web:
   stage: test
+  needs: [web-binary]
+  variables:
+    E2E_WEB_BIN: $CI_PROJECT_DIR/bin/swagger-aggregator-web
   image: mcr.microsoft.com/playwright:v1.64.1-noble # browsers + Node; the tag must match @playwright/test in web/package.json
   cache:
     key:

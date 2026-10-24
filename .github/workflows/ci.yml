@@ -44,6 +44,9 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5 # the e2e tests of the built-in auth run the real Go web server
+        with:
+          go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v4 # vue-tsc (typecheck) needs Node, not the Bun runtime
         with:
