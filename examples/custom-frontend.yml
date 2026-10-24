@@ -1,0 +1,17 @@
+# Your own frontend on another origin (another port or host) talks to the API with the session cookie.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f examples/build-in-admin.yml \
+#     -f examples/custom-frontend.yml up -d --build        # or with any other login overlay
+#
+# In your frontend: fetch(url, {credentials: "include"}) and new EventSource(url, {withCredentials: true}).
+# The API is described at http://localhost:8080/api-docs (OpenAPI incl. the event stream and MCP).
+#
+# Same origin is simpler and needs none of this: set SWAGGER_AGGREGATOR_WEB_DIR to your build instead.
+services:
+  web:
+    environment:
+      # exact origins, comma separated, never *
+      SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS: http://localhost:5173
+      # lax (default) works for a frontend on the same SITE (localhost:5173 -> localhost:8080, or two subdomains).
+      # A frontend on another site (app.example.org -> docs.example.com) needs none, which implies HTTPS (Secure cookie):
+      # SWAGGER_AGGREGATOR_WEB_COOKIE_SAMESITE: none

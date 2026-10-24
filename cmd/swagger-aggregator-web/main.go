@@ -80,6 +80,8 @@ func newCmd() *cobra.Command {
 	f.Duration("session-ttl", 8*time.Hour, "how long a login lasts (auth=oidc)")
 	f.Bool("mcp", false, "serve a read-only MCP server for AI assistants at /mcp (needs --mcp-token)")
 	f.String("mcp-token", "", "bearer token the MCP clients must send, >= 32 characters (use the environment variable)")
+	f.StringSlice("cors-origins", nil, "origins (scheme://host[:port]) of a separate frontend that may use the API with the session cookie")
+	f.String("cookie-samesite", "lax", "lax (default) or none: none lets a frontend on another site use the cookie (needs --cors-origins and HTTPS)")
 	f.String("log-level", "info", "debug, info, warn or error")
 	f.String("log-format", logging.FormatConsole, "console (human readable) or json (for log collectors)")
 	v.SetEnvPrefix(envPrefix)
@@ -126,7 +128,16 @@ func run(parent context.Context, v *viper.Viper) error {
 		return fmt.Errorf("invalid --base-path %q (want e.g. /docs)", v.GetString("base-path"))
 	}
 
-	protect, closeAuth, err := authMiddleware(parent, v, base, log)
+	corsOrigins, err := server.ParseCORSOrigins(splitList(v.GetStringSlice("cors-origins")))
+	if err != nil {
+		return fmt.Errorf("--cors-origins: %w", err)
+	}
+	sameSite, err := parseSameSite(v.GetString("cookie-samesite"), len(corsOrigins) > 0)
+	if err != nil {
+		return err
+	}
+
+	protect, closeAuth, err := authMiddleware(parent, v, base, sameSite, log)
 	if err != nil {
 		return err
 	}
@@ -148,7 +159,7 @@ func run(parent context.Context, v *viper.Viper) error {
 	// No WriteTimeout: it would kill the proxied SSE stream.
 	srv := &http.Server{
 		Addr:              v.GetString("listen"),
-		Handler:           server.NewWebHandler(server.WebConfig{UI: os.DirFS(dir), API: api, BasePath: base, Protect: protect, MCP: mcpHandler}),
+		Handler:           server.NewWebHandler(server.WebConfig{UI: os.DirFS(dir), API: api, BasePath: base, Protect: protect, MCP: mcpHandler, CORSOrigins: corsOrigins}),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 	go func() {
@@ -172,6 +183,7 @@ func authMiddleware(
 	ctx context.Context,
 	v *viper.Viper,
 	base string,
+	sameSite http.SameSite,
 	log *zap.Logger,
 ) (func(http.Handler) http.Handler, func(), error) {
 	noop := func() {}
@@ -192,6 +204,7 @@ func authMiddleware(
 			Scopes:        splitList(v.GetStringSlice("oidc-scopes")),
 			GroupsClaim:   v.GetString("oidc-groups-claim"),
 			SessionTTL:    v.GetDuration("session-ttl"),
+			SameSite:      sameSite,
 			AllowedGroups: splitList(v.GetStringSlice("oidc-allowed-groups")),
 			AllowedEmails: splitList(v.GetStringSlice("oidc-allowed-emails")),
 		}, log)
@@ -201,7 +214,7 @@ func authMiddleware(
 		log.Info("authentication enabled", zap.String("mode", mode), zap.String("issuer", v.GetString("oidc-issuer")))
 		return o.Wrap, noop, nil
 	case authBuiltIn:
-		return builtInAuth(ctx, v, base, log)
+		return builtInAuth(ctx, v, base, sameSite, log)
 	default:
 		return nil, noop, fmt.Errorf("invalid --auth %q (none, build_in or oidc)", mode)
 	}
@@ -211,6 +224,7 @@ func builtInAuth(
 	ctx context.Context,
 	v *viper.Viper,
 	base string,
+	sameSite http.SameSite,
 	log *zap.Logger,
 ) (func(http.Handler) http.Handler, func(), error) {
 	noop := func() {}
@@ -232,6 +246,7 @@ func builtInAuth(
 		SessionSecret: secret,
 		BasePath:      base,
 		SessionTTL:    v.GetDuration("session-ttl"),
+		SameSite:      sameSite,
 		SetupToken:    v.GetString("setup-token"),
 	}, log)
 	if err != nil {
@@ -280,4 +295,19 @@ func version() string {
 		return bi.Main.Version
 	}
 	return "dev"
+}
+
+// parseSameSite reads --cookie-samesite. "none" only makes sense (and is only safe) together with a CORS list: the
+// browser no longer keeps other sites from sending the cookie, so the server's origin check has to be on.
+func parseSameSite(value string, corsOn bool) (http.SameSite, error) {
+	switch strings.ToLower(value) {
+	case "", "lax":
+		return http.SameSiteLaxMode, nil
+	case "none":
+		if !corsOn {
+			return 0, errors.New("--cookie-samesite=none needs --cors-origins: it is for a frontend on another site, and the CORS list is what protects the cookie then")
+		}
+		return http.SameSiteNoneMode, nil
+	}
+	return 0, fmt.Errorf("invalid --cookie-samesite %q (lax or none)", value)
 }

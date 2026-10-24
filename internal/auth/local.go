@@ -45,6 +45,9 @@ type LocalConfig struct {
 	SetupToken string
 	// BcryptCost defaults to 12; tests lower it.
 	BcryptCost int
+	// SameSite of the session cookie: Lax (the default, also for the zero value) or None for a frontend on another
+	// *site* (None implies Secure, so it needs HTTPS or localhost).
+	SameSite http.SameSite
 	// ThrottleBase is the delay after the first failed attempt (default 1s); it doubles up to 30s.
 	ThrottleBase time.Duration
 }
@@ -543,7 +546,8 @@ func (l *Local) cookie(r *http.Request, value string, maxAge int) *http.Cookie {
 	}
 	return &http.Cookie{
 		Name: sessionCookie, Value: value, Path: path, MaxAge: maxAge, HttpOnly: true,
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" || l.cfg.SameSite == http.SameSiteNoneMode,
+		SameSite: sameSiteOrLax(l.cfg.SameSite),
 	}
 }
 
@@ -595,7 +599,7 @@ func pathID(w http.ResponseWriter, r *http.Request) (uint, bool) {
 }
 
 // decode reads a small JSON body. Requiring application/json keeps the mutations out of reach of plain
-// cross-site HTML forms (on top of the SameSite=Lax cookie).
+// cross-site HTML forms (on top of the SameSite cookie, and of the origin check when CORS is on).
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if ct := r.Header.Get("Content-Type"); ct != "application/json" && !strings.HasPrefix(ct, "application/json;") {
 		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content type must be application/json"})

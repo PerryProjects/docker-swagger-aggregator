@@ -28,6 +28,9 @@ type WebConfig struct {
 	// MCP serves the Model Context Protocol at /mcp. It sits outside Protect on purpose: AI clients cannot
 	// do a browser login, so the handler has to authenticate itself (a bearer token). nil: no /mcp.
 	MCP http.Handler
+	// CORSOrigins are the origins (from ParseCORSOrigins) a separate frontend may be served from; empty: same
+	// origin only. See CORS.
+	CORSOrigins []string
 }
 
 // NewWebHandler serves the built UI and forwards /api/ to the API, so the
@@ -55,7 +58,7 @@ func NewWebHandler(cfg WebConfig) http.Handler {
 		outer.Handle("/", h)
 		h = outer
 	}
-	return securityHeaders(stripBasePath(cfg.BasePath, h))
+	return securityHeaders(CORS(cfg.CORSOrigins)(stripBasePath(cfg.BasePath, h)))
 }
 
 // stripBasePath removes the public prefix from the request path (a no-op for "").

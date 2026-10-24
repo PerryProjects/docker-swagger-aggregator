@@ -171,3 +171,40 @@ test('the navigation reaches every page and the API page documents REST, the eve
   await page.getByRole('menubar').getByRole('menuitem', { name: 'API' }).click()
   await expect(page).toHaveURL(/\/api-docs(#.*)?$/)
 })
+
+// A separate frontend on another origin (e2e/custom-frontend, port 4175) against the Go server (4174), whose CORS
+// list names exactly http://127.0.0.1:4175.
+test.describe('a frontend on another origin', () => {
+  const api = 'http://127.0.0.1:4174'
+  type Result = { login?: number; services?: string[] | number; event?: string[] | string; error?: string }
+  const attempt = (page: Page) =>
+    page.evaluate(([a, u, p]) => (window as unknown as { attempt: (...x: string[]) => Promise<Result> }).attempt(a, u, p),
+      [api, ADMIN.name, 'a brand new password'])
+
+  test('a listed origin can sign in, read the API and follow the event stream with credentials', async ({ page }) => {
+    await page.goto('http://127.0.0.1:4175/')
+    const result = await attempt(page)
+    expect(result).toEqual({ login: 200, services: ['alpha'], event: ['alpha'] })
+  })
+
+  test('an origin that is not listed is blocked by the browser, and the server answers its preflight with 403', async ({ page, request }) => {
+    await page.goto('http://localhost:4175/') // another origin than the one in the list
+    const result = await attempt(page)
+    expect(result.error).toMatch(/Failed to fetch|NetworkError|Load failed/)
+    expect(result.login).toBeUndefined()
+
+    const preflight = await request.fetch(`${api}/auth/login`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:4175', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
+    })
+    expect(preflight.status()).toBe(403)
+    expect(preflight.headers()['access-control-allow-origin']).toBeUndefined()
+  })
+
+  test('a changing request from an unlisted origin is refused by the server, one without Origin is not', async ({ request }) => {
+    const refused = await request.post(`${api}/auth/logout`, { headers: { Origin: 'http://evil.example' } })
+    expect(refused.status()).toBe(403)
+    const fine = await request.post(`${api}/auth/logout`) // curl, a server: no Origin header
+    expect(fine.status()).toBe(204)
+  })
+})

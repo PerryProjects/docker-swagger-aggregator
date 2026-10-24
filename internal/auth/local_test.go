@@ -359,3 +359,46 @@ func TestBootstrapFromEnvironment(t *testing.T) {
 		t.Fatal("a non-bcrypt hash must be refused")
 	}
 }
+
+func TestSessionCookieSameSiteIsConfigurable(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		sameSite   http.SameSite
+		want       http.SameSite
+		wantSecure bool
+	}{
+		"default is Lax and not Secure on plain http": {0, http.SameSiteLaxMode, false},
+		"None needs (and sets) Secure":                {http.SameSiteNoneMode, http.SameSiteNoneMode, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, err := store.OpenMemory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			l, err := auth.NewLocal(auth.LocalConfig{
+				Store: s, SessionSecret: secret, SetupToken: setupToken, BcryptCost: bcrypt.MinCost, SameSite: tc.sameSite,
+			}, zap.NewNop())
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(l.Wrap(http.NotFoundHandler()))
+			defer srv.Close()
+			if err = l.Bootstrap(context.Background(), "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			body := `{"token":"` + setupToken + `","username":"admin","password":"correct horse battery"}`
+			resp, err := http.Post(srv.URL+"/auth/setup", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			cookies := resp.Cookies()
+			if len(cookies) != 1 || cookies[0].SameSite != tc.want || cookies[0].Secure != tc.wantSecure || !cookies[0].HttpOnly {
+				t.Fatalf("session cookie: %+v", cookies)
+			}
+		})
+	}
+}

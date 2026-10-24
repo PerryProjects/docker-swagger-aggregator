@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>A custom frontend (e2e)</title>
+<h1>A custom frontend on another origin</h1>
+<script>
+  // What a separate frontend does against the API: sign in, read the list, follow the event stream. Credentials are
+  // the session cookie; the browser only sends it (and lets the page read the answers) if the server's CORS list names
+  // this page's origin.
+  window.attempt = async (api, username, password) => {
+    const out = {}
+    try {
+      const login = await fetch(api + '/auth/login', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }),
+      })
+      out.login = login.status
+      const list = await fetch(api + '/api/services', { credentials: 'include' })
+      out.services = list.ok ? (await list.json()).map((s) => s.name) : list.status
+      out.event = await new Promise((resolve) => {
+        const es = new EventSource(api + '/api/events', { withCredentials: true })
+        es.addEventListener('services', (e) => { es.close(); resolve(JSON.parse(e.data).map((s) => s.name)) })
+        es.onerror = () => { es.close(); resolve('error') }
+        setTimeout(() => { es.close(); resolve('timeout') }, 5000)
+      })
+    } catch (e) {
+      out.error = String(e)
+    }
+    return out
+  }
+</script>

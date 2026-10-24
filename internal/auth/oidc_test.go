@@ -403,3 +403,19 @@ func TestProviderDownAnswers503NotCrash(t *testing.T) {
 		t.Fatalf("want 503, got %d", resp.StatusCode)
 	}
 }
+
+func TestOIDCCookiesFollowTheSameSiteSetting(t *testing.T) {
+	t.Parallel()
+
+	a := newApp(t, newIDP(t), func(c *auth.Config) { c.SameSite = http.SameSiteNoneMode })
+	r := signIn(t, a, browser(t), "/")
+	var session *http.Cookie
+	for _, ck := range r.Cookies() {
+		if ck.Name == "swagger_aggregator_session" {
+			session = ck
+		}
+	}
+	if session == nil || session.SameSite != http.SameSiteNoneMode || !session.Secure {
+		t.Fatalf("session cookie for a frontend on another site: %+v", session)
+	}
+}

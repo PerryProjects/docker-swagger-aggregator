@@ -25,10 +25,16 @@ export default defineConfig({
       // The real Go web server with built-in auth in front of the mock API; serves the build made above.
       // E2E_WEB_BIN: a prebuilt binary (CI); by default it is built from the sources
       command: `${process.env.E2E_WEB_BIN ?? 'go build -o .e2e-web ../cmd/swagger-aggregator-web && ./.e2e-web'} --dir dist --api http://127.0.0.1:18081 --listen 127.0.0.1:4174`,
-      env: { SWAGGER_AGGREGATOR_WEB_AUTH: 'build_in', SWAGGER_AGGREGATOR_WEB_DATA_DIR: dataDir, SWAGGER_AGGREGATOR_WEB_SETUP_TOKEN: 'e2e-setup-token' },
+      env: { SWAGGER_AGGREGATOR_WEB_AUTH: 'build_in', SWAGGER_AGGREGATOR_WEB_DATA_DIR: dataDir, SWAGGER_AGGREGATOR_WEB_SETUP_TOKEN: 'e2e-setup-token', SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS: 'http://127.0.0.1:4175' },
       url: 'http://127.0.0.1:4174/healthz',
       reuseExistingServer: false,
       timeout: 120_000,
+    },
+    {
+      // A "custom frontend" on another origin (127.0.0.1:4175) that the CORS list of the server above names.
+      command: 'bun e2e/static-server.mjs e2e/custom-frontend 4175',
+      url: 'http://127.0.0.1:4175/',
+      reuseExistingServer: false,
     },
   ],
 })

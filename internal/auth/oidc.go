@@ -63,6 +63,9 @@ type Config struct {
 	// the (verified) e-mail addresses. Both empty: every user the provider authenticates.
 	AllowedGroups []string
 	AllowedEmails []string
+	// SameSite of the cookies: Lax (the default, also for the zero value) or None for a frontend on another *site*
+	// (None implies Secure, so it needs HTTPS or localhost).
+	SameSite http.SameSite
 	// HTTPClient is used for the provider (discovery, keys, token, userinfo); default http.DefaultClient.
 	HTTPClient *http.Client
 }
@@ -119,7 +122,7 @@ func New(cfg Config, log *zap.Logger) (*OIDC, error) {
 	}
 	return &OIDC{
 		cfg: cfg, log: log, cookies: sc, cookiePath: path,
-		secure: strings.HasPrefix(cfg.RedirectURL, "https://"),
+		secure: strings.HasPrefix(cfg.RedirectURL, "https://") || cfg.SameSite == http.SameSiteNoneMode,
 	}, nil
 }
 
@@ -378,7 +381,7 @@ func (a *OIDC) setCookie(w http.ResponseWriter, name string, v any, ttl time.Dur
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: enc, Path: a.cookiePath, MaxAge: int(ttl.Seconds()),
-		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: a.secure, SameSite: sameSiteOrLax(a.cfg.SameSite),
 	})
 	return true
 }
@@ -386,7 +389,7 @@ func (a *OIDC) setCookie(w http.ResponseWriter, name string, v any, ttl time.Dur
 func (a *OIDC) clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: "", Path: a.cookiePath, MaxAge: -1,
-		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: a.secure, SameSite: sameSiteOrLax(a.cfg.SameSite),
 	})
 }
 
@@ -424,4 +427,12 @@ func stringList(v any) []string {
 		return out
 	}
 	return nil
+}
+
+// sameSiteOrLax maps the zero value of a config field to the default, Lax.
+func sameSiteOrLax(s http.SameSite) http.SameSite {
+	if s == 0 {
+		return http.SameSiteLaxMode
+	}
+	return s
 }

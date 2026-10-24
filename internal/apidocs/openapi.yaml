@@ -13,9 +13,24 @@ info:
     **Authentication** depends on `SWAGGER_AGGREGATOR_WEB_AUTH`:
     - `none`: no authentication.
     - `build_in`: sign in with `POST /auth/login`; the session is an `HttpOnly` cookie. `/api/*` answers `401` without it.
-      Browsers send the cookie automatically (use `credentials: "include"` for `fetch` across origins; cross-origin use needs
-      CORS, which this server does not provide, so host your frontend on the same origin, e.g. by pointing `--dir` at its build).
+      Browsers send the cookie automatically; across origins use `credentials: "include"` for `fetch` and
+      `new EventSource(url, {withCredentials: true})` (see **A frontend on another origin**).
     - `oidc`: the browser is redirected to the identity provider (`/auth/login` is then a redirect, `/auth/session` etc. do not exist).
+
+    ## A frontend on another origin
+
+    The simplest is the same origin (point `--dir` of the web server at your build, or route your frontend and this
+    interface to one host). A frontend on **another origin** needs the server's CORS list:
+    `SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS=https://app.example.com` (exact origins, comma separated, never `*`).
+    For those origins the server answers with `Access-Control-Allow-Origin: <that origin>` and
+    `Access-Control-Allow-Credentials: true`, and answers preflights itself (methods `GET, POST, PUT, PATCH, DELETE`,
+    headers `Content-Type`, `Accept`, `If-None-Match`). The cookie is `SameSite=Lax`, which a frontend on the same
+    *site* (e.g. `localhost:5173` and `localhost:3000`, or `app.example.com` and `docs.example.com`) can use. A frontend on
+    another *site* needs `SWAGGER_AGGREGATOR_WEB_COOKIE_SAMESITE=none` (then the cookie is `Secure`: HTTPS or localhost).
+
+    With a CORS list configured the server also refuses requests that change something (`POST`, `PUT`, `PATCH`,
+    `DELETE`) with an `Origin` header that is neither listed nor its own: `403`. Requests without an `Origin` header
+    (curl, other servers) are not browser requests and pass.
 
     The `/auth/*` operations below are those of `build_in`. The read-only **MCP** server for AI assistants lives at `/mcp`
     (JSON-RPC over Streamable HTTP, bearer token, only when enabled): see the **MCP** section.
