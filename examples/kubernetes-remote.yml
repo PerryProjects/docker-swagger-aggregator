@@ -7,7 +7,12 @@
 # the cluster. Needs the RBAC of deploy/kubernetes/rbac.yaml for the user of the kubeconfig. A kubeconfig that points
 # at 127.0.0.1 (kind, Docker Desktop) does not work from inside a container: use a reachable server address.
 services:
+  web:
+    build:
+      args: {KUBERNETES: "true"}       # both services share one image: build it with Kubernetes support
   api:
+    build:
+      args: {KUBERNETES: "true"}       # the default image is the small Docker-only one (no client-go)
     depends_on: !reset []              # no Docker socket proxy needed
     environment:
       SWAGGER_AGGREGATOR_DOCKER: "false"

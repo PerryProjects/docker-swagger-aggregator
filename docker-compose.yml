@@ -22,7 +22,12 @@ services:
 
   # API: discovery, spec proxy, SSE. Not published; only the web server talks to it.
   api:
-    build: .
+    build:
+      context: .
+      args:
+        PRIMEVUE_LICENSE: ${PRIMEVUE_LICENSE:-}
+        KUBERNETES: ${KUBERNETES:-false} # the small Docker-only API; examples/kubernetes-remote.yml sets true
+        COMPRESS_BINARIES: ${COMPRESS_BINARIES:-} # best | lzma: much smaller binaries, slower start (see Dockerfile)
     environment:
       DOCKER_HOST: tcp://socket-proxy:2375
       SWAGGER_AGGREGATOR_NETWORK: swagger-aggregator
@@ -43,7 +48,12 @@ services:
 
   # Web: serves the built UI and forwards /api to the API.
   web:
-    build: .
+    build:
+      context: .
+      args:
+        PRIMEVUE_LICENSE: ${PRIMEVUE_LICENSE:-}
+        KUBERNETES: ${KUBERNETES:-false} # the small Docker-only API; examples/kubernetes-remote.yml sets true
+        COMPRESS_BINARIES: ${COMPRESS_BINARIES:-} # best | lzma: much smaller binaries, slower start (see Dockerfile)
     entrypoint: ["/swagger-aggregator-web"]
     environment:
       SWAGGER_AGGREGATOR_WEB_DIR: /web/dist
@@ -56,6 +66,9 @@ services:
       SWAGGER_AGGREGATOR_WEB_ADMIN_USER: ${SWAGGER_AGGREGATOR_WEB_ADMIN_USER:-}
       SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD: ${SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD:-}
       # Read-only MCP server for AI assistants at /mcp; needs a token of at least 32 characters (README, "MCP").
+      # A separate frontend on another origin (README, "Build your own frontend"):
+      SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS: ${SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS:-}
+      SWAGGER_AGGREGATOR_WEB_COOKIE_SAMESITE: ${SWAGGER_AGGREGATOR_WEB_COOKIE_SAMESITE:-lax}
       SWAGGER_AGGREGATOR_WEB_MCP: ${SWAGGER_AGGREGATOR_WEB_MCP:-false}
       SWAGGER_AGGREGATOR_WEB_MCP_TOKEN: ${SWAGGER_AGGREGATOR_WEB_MCP_TOKEN:-}
     volumes:

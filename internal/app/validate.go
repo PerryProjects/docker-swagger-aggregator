@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/perryprojects/docker-swagger-aggregator/internal/discovery/kubernetes"
 )
 
 // Limits. They reject accidents (a missing unit, a zero, a typo'd magnitude), not legitimate tuning.
@@ -196,8 +194,8 @@ func (c Config) validateKubernetes(v *collector) {
 		})
 		return
 	}
-	if k.Access != accessAuto && k.Access != string(kubernetes.AccessService) &&
-		k.Access != string(kubernetes.AccessAPIServer) {
+	if k.Access != accessAuto && k.Access != accessService &&
+		k.Access != accessAPIServer {
 		v.addf("kube-access", "%q is not one of auto, service, apiserver", k.Access)
 	}
 	if !validDNSName(k.ClusterDomain) {

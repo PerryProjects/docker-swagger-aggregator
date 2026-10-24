@@ -23,6 +23,9 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race -count=1 ./...
+      # the small Docker-only API (no client-go) must keep building and passing
+      - run: go vet -tags nokubernetes ./...
+      - run: go test -tags nokubernetes -count=1 ./internal/app/ ./cmd/...
       - uses: golangci/golangci-lint-action@v8
         with:
           version: latest # .golangci.yml is a v2 config; pin a version once you want reproducible lint
@@ -39,6 +42,10 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    env:
+      # PrimeVue 5 licence key (a repository secret, never in the code). Pull requests from forks have no secret: the
+      # tests still pass, the UI just shows PrimeVue's "Invalid PrimeUI License" badge.
+      VITE_PRIMEVUE_LICENSE: ${{ secrets.PRIMEVUE_LICENSE }}
     defaults:
       run:
         working-directory: web
@@ -73,6 +80,10 @@ jobs:
   image:
     needs: [go, web]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # full: with Kubernetes support (deploy/kubernetes). docker: the small API without client-go, for Docker setups.
+        variant: [full, docker]
     permissions:
       contents: read
       packages: write
@@ -84,6 +95,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            suffix=${{ matrix.variant == 'docker' && '-docker' || '' }},onlatest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -99,8 +112,11 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            KUBERNETES=${{ matrix.variant == 'full' }}
+            PRIMEVUE_LICENSE=${{ secrets.PRIMEVUE_LICENSE }}
           push: ${{ github.event_name != 'pull_request' }} # pull requests only prove that it builds
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}

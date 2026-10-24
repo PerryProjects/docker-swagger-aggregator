@@ -7,3 +7,8 @@ web/playwright-report
 web/e2e
 demo
 docker-compose*.yml
+.env
+.env.local
+**/.env
+**/.env.local
+**/*.local

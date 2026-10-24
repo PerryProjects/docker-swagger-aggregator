@@ -25,6 +25,9 @@ go:
   script:
     - go vet ./...
     - go test -race -count=1 ./...
+    # the small Docker-only API (no client-go) must keep building and passing
+    - go vet -tags nokubernetes ./...
+    - go test -tags nokubernetes -count=1 ./internal/app/ ./cmd/...
 
 lint:
   stage: test
@@ -52,6 +55,9 @@ web:
   needs: [web-binary]
   variables:
     E2E_WEB_BIN: $CI_PROJECT_DIR/bin/swagger-aggregator-web
+    # PrimeVue 5 licence key: a masked CI/CD variable PRIMEVUE_LICENSE (never in the code). Without it the tests pass and the
+    # UI shows PrimeVue's "Invalid PrimeUI License" badge.
+    VITE_PRIMEVUE_LICENSE: $PRIMEVUE_LICENSE
   image: mcr.microsoft.com/playwright:v1.64.1-noble # browsers + Node; the tag must match @playwright/test in web/package.json
   cache:
     key:
@@ -93,8 +99,14 @@ image:
   script:
     - |
       TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
-      TAGS="-t $CI_REGISTRY_IMAGE:$TAG"
-      if [ -n "$CI_COMMIT_TAG" ]; then TAGS="$TAGS -t $CI_REGISTRY_IMAGE:latest"; fi
-      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then TAGS="$TAGS -t $CI_REGISTRY_IMAGE:main"; fi
       OUT="--output=type=image,push=$PUSH"
-      docker buildx build --platform linux/amd64,linux/arm64 $TAGS $OUT .
+      # two variants: full (Kubernetes support, deploy/kubernetes) and docker (the small API without client-go, suffix -docker)
+      for variant in full docker; do
+        SUFFIX=""; K8S=true
+        if [ "$variant" = docker ]; then SUFFIX="-docker"; K8S=false; fi
+        TAGS="-t $CI_REGISTRY_IMAGE:$TAG$SUFFIX"
+        if [ -n "$CI_COMMIT_TAG" ]; then TAGS="$TAGS -t $CI_REGISTRY_IMAGE:latest$SUFFIX"; fi
+        if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then TAGS="$TAGS -t $CI_REGISTRY_IMAGE:main$SUFFIX"; fi
+        docker buildx build --platform linux/amd64,linux/arm64 --build-arg KUBERNETES=$K8S \
+          --build-arg PRIMEVUE_LICENSE="$PRIMEVUE_LICENSE" $TAGS $OUT .
+      done
