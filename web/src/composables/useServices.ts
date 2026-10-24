@@ -9,6 +9,16 @@ export interface Service {
   error?: string
   group?: string
   order?: number
+  // what the spec says
+  title?: string
+  version?: string
+  openapi?: string
+  endpoints?: number
+  // where and how it runs
+  source?: 'docker' | 'kubernetes'
+  health?: string
+  replicas?: number
+  replicasUp?: number
 }
 
 const POLL_MS = 15_000

@@ -7,6 +7,8 @@ import { expect, test, type Page } from '@playwright/test'
 interface Svc {
   name: string; status?: 'up' | 'down'; hash?: string; group?: string; order?: number
   noSpec?: boolean; error?: string
+  title?: string; version?: string; openapi?: string; endpoints?: number
+  source?: 'docker' | 'kubernetes'; health?: string; replicas?: number; replicasUp?: number
 }
 const set = (services: Svc[]) =>
   fetch('http://127.0.0.1:18081/__mock', { method: 'POST', body: JSON.stringify({ services }) })
@@ -132,9 +134,9 @@ test('a service that never delivered a spec is listed with its problem, not hidd
 // The status page is a PrimeVue DataTable: a row is found through the marker inside its first cell.
 const row = (page: Page, name: string) => page.locator('tr', { has: page.locator(`[data-service="${name}"]`) })
 const expectSummary = async (page: Page, up: number, down: number) => {
-  const summary = page.getByRole('status')
-  await expect(summary).toContainText(`${up} up`)
-  await expect(summary).toContainText(`${down} down`)
+  const summary = page.getByRole('status', { name: 'Summary' }) // the tiles: "Up 3", "Down 0"
+  await expect(summary).toContainText(new RegExp(`Up\\s*${up}\\b`))
+  await expect(summary).toContainText(new RegExp(`Down\\s*${down}\\b`))
 }
 
 test('the documentation has a navigation to the other pages', async ({ page }) => {
@@ -147,16 +149,19 @@ test('the documentation has a navigation to the other pages', async ({ page }) =
 })
 
 // These run against `vite preview` and the mock API, i.e. without the Go web server: the UI does not need it.
-test('the API page shows the own API incl. the event stream and MCP, served by Vite alone', async ({ page }) => {
+test('the API page shows the own API (REST, event streams, MCP) as OpenAPI and AsyncAPI, served by Vite alone', async ({ page }) => {
   await page.goto('/api-docs')
   await expect(page.getByRole('heading', { name: 'Swagger Aggregator HTTP API' })).toBeVisible()
   const sidebar = page.getByRole('complementary')
   await expect(sidebar.getByText('Events', { exact: true })).toBeVisible()
   await expect(sidebar.getByText('MCP', { exact: true })).toBeVisible()
-  await expect(page.getByText('AsyncAPI')).toHaveCount(0) // one document, no switcher
+  await page.getByText('REST API (OpenAPI)').first().click() // two documents: the switcher offers both
+  await expect(page.getByText('Events (AsyncAPI)').first()).toBeVisible()
+  await page.keyboard.press('Escape')
   const res = await page.request.get('/spec/openapi.json')
   expect(res.status()).toBe(200)
-  expect(Object.keys((await res.json()).paths)).toEqual(expect.arrayContaining(['/api/events', '/mcp']))
+  expect(Object.keys((await res.json()).paths)).toEqual(expect.arrayContaining(['/api/events', '/auth/users/events', '/mcp']))
+  expect((await (await page.request.get('/spec/asyncapi.json')).json()).asyncapi).toBe('3.1.0')
 })
 
 test('the documentation view loads no PrimeVue or Tailwind styles', async ({ page }) => {
@@ -202,5 +207,92 @@ test.describe('status page', () => {
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Status' }).click()
     await expect(page).toHaveURL(/\/status$/)
     await expect(page.getByRole('heading', { name: 'Service status' })).toBeVisible()
+  })
+})
+
+test.describe('status page: search, filters and details', () => {
+  const orders: Svc = { name: 'orders', group: 'shop', title: 'Orders (demo)', version: '1.4.0', openapi: '3.0.3', endpoints: 12, source: 'docker', health: 'healthy', replicas: 2, replicasUp: 2 }
+  const billing: Svc = { name: 'billing', group: 'shop', status: 'down', title: 'Billing', version: '2', openapi: '3.1.0', endpoints: 5, source: 'kubernetes', replicas: 3, replicasUp: 1, error: 'unexpected status 503 Service Unavailable' }
+  const legacy: Svc = { name: 'legacy', status: 'up', title: 'Old Inventory', version: '1.0', openapi: '2.0', endpoints: 3, source: 'docker' }
+  const names = async (page: Page) => (await page.locator('[data-service]').allInnerTexts()).map((t) => t.replace(/^.* \/ /, '')).sort()
+  // the table renders a moment after the data arrives: wait for the expected rows instead of reading them once
+  const expectNames = (page: Page, want: string[]) => expect.poll(() => names(page)).toEqual([...want].sort())
+
+  test.beforeEach(async () => { await set([orders, billing, legacy]) })
+
+  test('the tiles count and a tile filters', async ({ page }) => {
+    await page.goto('/status')
+    await expectSummary(page, 2, 1)
+    await expect(page.getByRole('status', { name: 'Summary' })).toContainText(/Endpoints\s*20/) // 12 + 5 + 3
+    await page.getByTestId('tile-down').click()
+    await expectNames(page, ['billing'])
+    await page.getByTestId('tile-all').click()
+    await expectNames(page, ['billing', 'legacy', 'orders'])
+  })
+
+  test('search finds by name, title, problem and group, all words must match', async ({ page }) => {
+    await page.goto('/status')
+    const search = page.getByRole('searchbox', { name: 'Search services' })
+    await search.fill('inventory') // only in a title
+    await expectNames(page, ['legacy'])
+    await search.fill('503') // only in a problem
+    await expectNames(page, ['billing'])
+    await search.fill('shop') // the group
+    await expectNames(page, ['billing', 'orders'])
+    await search.fill('shop kubernetes') // two words: both must match
+    await expectNames(page, ['billing'])
+    await search.fill('nothing like this')
+    await expect(page.getByTestId('no-match')).toContainText('nothing like this')
+    await page.getByTestId('no-match').getByRole('button', { name: 'Clear filters' }).click()
+    await expectNames(page, ['billing', 'legacy', 'orders'])
+    await expect(search).toHaveValue('')
+  })
+
+  test('the filter lives in the URL and survives a reload; "/" focuses the search', async ({ page }) => {
+    await page.goto('/status?q=orders&status=up')
+    await expect(page.getByRole('searchbox', { name: 'Search services' })).toHaveValue('orders')
+    await expectNames(page, ['orders'])
+    await page.reload()
+    await expectNames(page, ['orders'])
+
+    await page.getByRole('searchbox', { name: 'Search services' }).fill('')
+    await page.getByTestId('tile-down').click()
+    await expect.poll(() => page.url()).toContain('status=down')
+
+    await page.locator('main').click({ position: { x: 5, y: 5 } })
+    await page.keyboard.press('/')
+    await expect(page.getByRole('searchbox', { name: 'Search services' })).toBeFocused()
+    await page.keyboard.type('bill')
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('searchbox', { name: 'Search services' })).toHaveValue('')
+  })
+
+  test('a row opens its details', async ({ page }) => {
+    await page.goto('/status')
+    await row(page, 'billing').getByRole('button', { name: /Show details|Hide details/ }).click()
+    const details = page.locator('[data-details="billing"]')
+    await expect(details).toContainText('Billing')
+    await expect(details).toContainText('OpenAPI 3.1.0')
+    await expect(details).toContainText('Kubernetes Service')
+    await expect(details).toContainText('1 of 3 up')
+    await expect(details).toContainText('unexpected status 503')
+    await row(page, 'legacy').getByRole('button', { name: /Show details|Hide details/ }).click()
+    await expect(page.locator('[data-details="legacy"]')).toContainText('Swagger 2.0')
+  })
+
+  test('shows the group filter and that the page is live', async ({ page }) => {
+    await page.goto('/status')
+    await expect(page.getByTestId('live')).toContainText('Live')
+    await page.getByRole('combobox', { name: 'Filter by group' }).click()
+    await page.getByRole('option', { name: 'shop' }).click()
+    await expectNames(page, ['billing', 'orders'])
+  })
+
+  test('an update arrives while a filter is set', async ({ page }) => {
+    await page.goto('/status?q=billing')
+    await expect(row(page, 'billing')).toContainText('down')
+    await set([orders, { ...billing, status: 'up', error: undefined }, legacy])
+    await expect(row(page, 'billing')).toContainText('up')
+    await expect(row(page, 'billing')).not.toContainText('503')
   })
 })

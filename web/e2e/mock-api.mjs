@@ -21,6 +21,8 @@ const list = () =>
   services.map((s) => ({
     name: s.name, status: s.status ?? 'up', specHash: s.noSpec ? undefined : s.hash ?? `${s.name[0]}1`,
     group: s.group, order: s.order, error: s.error,
+    title: s.title, version: s.version, openapi: s.openapi, endpoints: s.endpoints, source: s.source, health: s.health,
+    replicas: s.replicas, replicasUp: s.replicasUp,
     lastSeen: s.noSpec ? undefined : new Date().toISOString(),
   }))
 const push = () => { for (const c of clients) c.write(`event: services\ndata: ${JSON.stringify(list())}\n\n`) }

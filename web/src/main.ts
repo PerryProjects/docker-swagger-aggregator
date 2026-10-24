@@ -31,6 +31,9 @@ async function start() {
       })
       .use(ToastService)
       .use(ConfirmationService)
+    // The row expander announces its state by default ("Row Expanded"); say what the button does instead.
+    const aria = app.config.globalProperties.$primevue.config.locale?.aria
+    if (aria) Object.assign(aria, { expandRow: 'Hide details', collapseRow: 'Show details' })
   }
   app.mount('#app')
 }

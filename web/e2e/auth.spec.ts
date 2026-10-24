@@ -161,15 +161,42 @@ test('the navigation reaches every page and the API page documents REST, the eve
   await expect(sidebar.getByText('Events', { exact: true })).toBeVisible() // the SSE events
   await expect(sidebar.getByText('MCP', { exact: true })).toBeVisible()
 
-  // the raw document is public and valid JSON, so a custom frontend can fetch it; AsyncAPI is gone
+  // the raw documents are public and valid JSON, so a custom frontend can fetch them
   const res = await page.request.get('/spec/openapi.json')
   expect(res.status()).toBe(200)
-  expect((await res.json()).openapi).toBe('3.1.0')
+  expect((await res.json()).openapi).toBe('3.2.0')
+  expect((await (await page.request.get('/spec/asyncapi.json')).json()).asyncapi).toBe('3.1.0')
+
+  // the AsyncAPI document describes both event streams
+  await page.getByText('REST API (OpenAPI)').first().click()
+  await page.getByText('Events (AsyncAPI)').first().click()
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator events' })).toBeVisible()
+  await expect(page.getByRole('complementary').getByText('User list').first()).toBeVisible()
 
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Status' }).click()
   await expect(page.getByTestId('current-user')).toHaveText('admin') // the PrimeVue menubar of the status page
   await page.getByRole('menubar').getByRole('menuitem', { name: 'API' }).click()
   await expect(page).toHaveURL(/\/api-docs(#.*)?$/)
+})
+
+test('the user list follows changes live (SSE): a user created in another browser shows up without a reload', async ({ page, browser }) => {
+  await signIn(page, ADMIN.name, 'a brand new password')
+  await page.goto('/users')
+  await expect(page.getByTestId('live')).toContainText('Live') // the event stream is connected
+  await expect(page.getByRole('row', { name: /zed/ })).toHaveCount(0)
+
+  const other = await browser.newPage({ baseURL: 'http://127.0.0.1:4174' })
+  await signIn(other, ADMIN.name, 'a brand new password')
+  const created = await other.request.post('/auth/users', { data: { username: 'zed', password: 'zed-password-12' } })
+  expect(created.status()).toBe(201)
+  await expect(page.getByRole('row', { name: /zed/ })).toBeVisible() // no reload, no click
+
+  const id = (await (await other.request.get('/auth/users')).json()).find((u: { username: string }) => u.username === 'zed').id
+  expect((await other.request.patch(`/auth/users/${id}`, { data: { disabled: true } })).status()).toBe(200)
+  await expect(page.getByRole('row', { name: /zed/ })).toContainText('disabled')
+  expect((await other.request.delete(`/auth/users/${id}`)).status()).toBe(204)
+  await expect(page.getByRole('row', { name: /zed/ })).toHaveCount(0)
+  await other.close()
 })
 
 // A separate frontend on another origin (e2e/custom-frontend, port 4175) against the Go server (4174), whose CORS

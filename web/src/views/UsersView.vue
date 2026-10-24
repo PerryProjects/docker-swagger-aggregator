@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
@@ -13,6 +13,7 @@ import ToggleSwitch from 'primevue/toggleswitch'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { createUser, deleteUser, listUsers, updateUser, type Role, type User } from '../api/auth'
+import { BASE } from '../base'
 import { useSession } from '../composables/useSession'
 
 const toast = useToast()
@@ -33,7 +34,30 @@ async function reload() {
     loading.value = false
   }
 }
-onMounted(reload)
+
+// The list follows the server live (Server-Sent Events): another admin, or another tab, changes a user and it shows here.
+// A stream that fails (not an admin any more, the server is gone) falls back to the one-off request above, which
+// then shows the reason; EventSource itself retries the connection when the network drops.
+const live = ref(false)
+let stream: EventSource | undefined
+function connect() {
+  stream = new EventSource(`${BASE}auth/users/events`)
+  stream.addEventListener('users', (e) => {
+    users.value = JSON.parse((e as MessageEvent).data)
+    loadError.value = ''
+    loading.value = false
+    live.value = true
+  })
+  stream.onerror = () => {
+    live.value = false
+    if (stream?.readyState === EventSource.CLOSED) void reload() // closed for good (401/403): show the reason
+  }
+}
+onMounted(() => {
+  void reload()
+  connect()
+})
+onUnmounted(() => stream?.close())
 
 const roles: { label: string; value: Role }[] = [
   { label: 'Admin (manages users)', value: 'admin' },
@@ -109,7 +133,10 @@ function remove(u: User) {
 <template>
   <main class="mx-auto max-w-4xl p-4 sm:p-6">
     <header class="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-2xl font-semibold">Users</h1>
+      <div class="flex items-center gap-3">
+        <h1 class="text-2xl font-semibold">Users</h1>
+        <Tag v-if="live" severity="success" icon="pi pi-bolt" value="Live" data-testid="live" />
+      </div>
       <Button label="New user" icon="pi pi-user-plus" @click="openCreate" />
     </header>
 
