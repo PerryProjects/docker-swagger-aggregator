@@ -7,3 +7,6 @@ web/playwright-report
 # local data of the built-in authentication
 /data/
 .e2e-web
+
+# per-user copies of the example environment files
+/examples/*.env

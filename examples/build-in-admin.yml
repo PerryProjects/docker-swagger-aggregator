@@ -1,0 +1,14 @@
+# Own login with users in SQLite; the first admin comes from the environment (no setup form).
+#
+#   cp examples/build-in-admin.env.example examples/build-in-admin.env   # then edit the password
+#   docker compose --env-file examples/build-in-admin.env \
+#     -f docker-compose.yml -f docker-compose.override.yml -f examples/build-in-admin.yml up -d --build
+#
+# The admin is created only while there are NO users; later changes of the variables never overwrite an
+# existing account (change the password on the Users page instead).
+services:
+  web:
+    environment:
+      SWAGGER_AGGREGATOR_WEB_AUTH: build_in
+      SWAGGER_AGGREGATOR_WEB_ADMIN_USER: ${SWAGGER_AGGREGATOR_WEB_ADMIN_USER:?set it in examples/build-in-admin.env}
+      SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD: ${SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD:?set it in examples/build-in-admin.env}

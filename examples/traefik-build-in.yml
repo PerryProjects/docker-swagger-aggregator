@@ -1,0 +1,22 @@
+# Production-like: behind an existing Traefik with TLS, own login, optional MCP.
+#
+#   cat > .env <<'ENV'
+#   TRAEFIK_NETWORK=proxy
+#   AGGREGATOR_HOST=docs.example.com
+#   SWAGGER_AGGREGATOR_WEB_ADMIN_USER=admin
+#   SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD=<a long password>
+#   ENV
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f examples/traefik-build-in.yml up -d --build
+#
+# Traefik passes X-Forwarded-Proto: https, so the session cookie gets the Secure attribute. To serve everything
+# below a path (docs.example.com/docs) set SWAGGER_AGGREGATOR_BASE_PATH on api and SWAGGER_AGGREGATOR_WEB_BASE_PATH
+# on web to /docs and route that prefix to the web service (no StripPrefix needed).
+services:
+  web:
+    environment:
+      SWAGGER_AGGREGATOR_WEB_AUTH: build_in
+      SWAGGER_AGGREGATOR_WEB_ADMIN_USER: ${SWAGGER_AGGREGATOR_WEB_ADMIN_USER:?set it in .env}
+      SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD: ${SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD:?set it in .env}
+      # Read-only MCP at https://docs.example.com/mcp (the token guards only /mcp):
+      # SWAGGER_AGGREGATOR_WEB_MCP: "true"
+      # SWAGGER_AGGREGATOR_WEB_MCP_TOKEN: ${SWAGGER_AGGREGATOR_WEB_MCP_TOKEN}

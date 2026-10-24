@@ -1,0 +1,13 @@
+# Own login with users in SQLite; the FIRST admin is registered in the browser.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f examples/build-in-setup.yml up -d --build
+#   docker compose logs web | grep setupToken      # the token for the setup form
+#   open http://localhost:8080                     # shows "Create the first admin"
+#
+# Users live in the named volume web-data (see docker-compose.yml): they survive `down` and re-creation, but
+# not `down -v`. Without a token nobody can claim a freshly started instance.
+services:
+  web:
+    environment:
+      SWAGGER_AGGREGATOR_WEB_AUTH: build_in
+      # SWAGGER_AGGREGATOR_WEB_SETUP_TOKEN: choose-your-own-token   # default: random, printed in the log

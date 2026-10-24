@@ -1,0 +1,21 @@
+# Document the Services of a Kubernetes cluster from your machine instead of Docker containers.
+# (Untested here: it needs a cluster whose API server is reachable from inside the container.)
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f examples/kubernetes-remote.yml up -d --build
+#
+# --kube-access=apiserver reaches the Services through the API server's service proxy, which works from outside
+# the cluster. Needs the RBAC of deploy/kubernetes/rbac.yaml for the user of the kubeconfig. A kubeconfig that points
+# at 127.0.0.1 (kind, Docker Desktop) does not work from inside a container: use a reachable server address.
+services:
+  api:
+    depends_on: !reset []              # no Docker socket proxy needed
+    environment:
+      SWAGGER_AGGREGATOR_DOCKER: "false"
+      SWAGGER_AGGREGATOR_KUBERNETES: "true"
+      SWAGGER_AGGREGATOR_KUBE_ACCESS: apiserver
+      SWAGGER_AGGREGATOR_KUBECONFIG: /kube/config
+      SWAGGER_AGGREGATOR_DERIVE_SERVER_URL: "true"   # server-url from Ingress / IngressRoute / HTTPRoute
+      # SWAGGER_AGGREGATOR_NAMESPACE: shop,billing   # only these namespaces (default: all)
+    volumes:
+      - ${KUBECONFIG:-~/.kube/config}:/kube/config:ro
+    networks: [frontend]               # no Docker networks needed either

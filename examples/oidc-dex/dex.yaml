@@ -1,0 +1,17 @@
+# Demo identity provider for examples/oidc-dex.yml. NOT for production: in-memory storage, one static user.
+# Sign in with  admin@example.com / demo-password
+issuer: http://dex.localhost:5556/dex
+storage: {type: memory}
+web: {http: 0.0.0.0:5556}
+oauth2: {skipApprovalScreen: true}
+staticClients:
+  - id: swagger-aggregator
+    name: Swagger Aggregator
+    secret: demo-client-secret
+    redirectURIs: ["http://localhost:8080/auth/callback"]
+enablePasswordDB: true
+staticPasswords:
+  - email: "admin@example.com"
+    hash: "$2a$10$EyUEIM3J27IV9Ee2ZzZ25OpA.JceIDuHIn.NXidiypvgDXrR8wNAW"
+    username: "admin"
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"

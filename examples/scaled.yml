@@ -1,0 +1,13 @@
+# Two API instances (high availability, e.g. to restart one without a gap in the UI).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f examples/scaled.yml up -d --build
+#
+# Every API instance watches Docker on its own and holds the full state, so nothing has to be shared and any web
+# request or event stream can go to either one (the web server finds them through the shared service name `api`).
+# The price: each instance fetches every spec itself (twice the probe traffic; raise --probe-interval if it matters).
+# Scaling the WEB server needs a load balancer in front (see docker-compose.traefik.yml) and, with auth=build_in,
+# is NOT possible (one SQLite file); with auth=oidc or none give every replica the same SESSION_SECRET.
+services:
+  api:
+    deploy:
+      replicas: 2

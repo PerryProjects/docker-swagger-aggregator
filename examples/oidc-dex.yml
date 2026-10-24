@@ -1,0 +1,33 @@
+# Login at an OpenID Connect provider - here a local Dex as a stand-in for Authelia, Keycloak, Authentik, ...
+# For a real provider drop the dex service and set the issuer, client id/secret and redirect URL.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f examples/oidc-dex.yml up -d --build
+#   open http://localhost:8080          # sign in with admin@example.com / demo-password
+#
+# The issuer must be the same address for the browser and for the web container: dex.localhost resolves to
+# 127.0.0.1 in browsers (where Dex is published), and to the dex container inside Docker through its network alias.
+services:
+  dex:
+    image: dexidp/dex:v2.46.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./examples/oidc-dex/dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "127.0.0.1:5556:5556"
+    networks:
+      frontend:
+        aliases: [dex.localhost]
+    restart: unless-stopped
+
+  web:
+    depends_on: [dex]
+    environment:
+      SWAGGER_AGGREGATOR_WEB_AUTH: oidc
+      SWAGGER_AGGREGATOR_WEB_OIDC_ISSUER: http://dex.localhost:5556/dex
+      SWAGGER_AGGREGATOR_WEB_OIDC_CLIENT_ID: swagger-aggregator
+      SWAGGER_AGGREGATOR_WEB_OIDC_CLIENT_SECRET: demo-client-secret
+      SWAGGER_AGGREGATOR_WEB_OIDC_REDIRECT_URL: http://localhost:8080/auth/callback
+      # Demo value. Generate your own (openssl rand -base64 48) - and use the SAME one on every web replica.
+      SWAGGER_AGGREGATOR_WEB_SESSION_SECRET: demo-only-change-me-0123456789abcdef0123456789abcdef
+      # Optional: only these Dex users may sign in (groups need a connector that reports them).
+      # SWAGGER_AGGREGATOR_WEB_OIDC_ALLOWED_EMAILS: admin@example.com

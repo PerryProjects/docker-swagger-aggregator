@@ -1,0 +1,14 @@
+# Add the read-only MCP server (/mcp) for AI assistants to any other setup.
+#
+#   export SWAGGER_AGGREGATOR_WEB_MCP_TOKEN=$(openssl rand -base64 32)
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f examples/mcp.yml up -d --build
+#   claude mcp add --transport http swagger-aggregator http://localhost:8080/mcp \
+#     --header "Authorization: Bearer $SWAGGER_AGGREGATOR_WEB_MCP_TOKEN"
+#
+# Combine it with a login by adding a second overlay, e.g. -f examples/build-in-admin.yml: the token only guards /mcp,
+# the login guards everything else.
+services:
+  web:
+    environment:
+      SWAGGER_AGGREGATOR_WEB_MCP: "true"
+      SWAGGER_AGGREGATOR_WEB_MCP_TOKEN: ${SWAGGER_AGGREGATOR_WEB_MCP_TOKEN:?export a token of at least 32 characters}
