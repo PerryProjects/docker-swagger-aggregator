@@ -23,6 +23,7 @@ const (
 	keyGroup     = ".group"
 	keyOrder     = ".order"
 	keyStrip     = ".strip-prefix"
+	keyScheme    = ".scheme"
 
 	defaultPath = "/openapi.json"
 )
@@ -44,6 +45,8 @@ type Target struct {
 	// KeepServerPath: forward the server-url path as is (the workload serves under it);
 	// the default replaces it by the workload root, like a proxy that strips the prefix.
 	KeepServerPath bool
+	// Scheme is how the workload itself is reached: "http" (default) or "https".
+	Scheme string
 }
 
 // ParseTarget interprets a workload's attributes. nameFallbacks are tried in
@@ -58,7 +61,7 @@ func ParseTarget(
 	if attrs[EnableKey(prefix)] != "true" {
 		return Target{}, ErrNotEnabled
 	}
-	t := Target{Path: defaultPath, Group: attrs[prefix+keyGroup]}
+	t := Target{Path: defaultPath, Group: attrs[prefix+keyGroup], Scheme: "http"}
 
 	t.Name = first(append([]string{attrs[prefix+keyName]}, nameFallbacks...)...)
 	if t.Name == "" {
@@ -76,6 +79,12 @@ func ParseTarget(
 	}
 	if t.KeepServerPath, err = parseKeepServerPath(prefix, attrs); err != nil {
 		return t, err
+	}
+	if s := attrs[prefix+keyScheme]; s != "" {
+		if s != "http" && s != "https" {
+			return t, fmt.Errorf("invalid %s%s %q (http or https)", prefix, keyScheme, s)
+		}
+		t.Scheme = s
 	}
 	if o := attrs[prefix+keyOrder]; o != "" {
 		if t.Order, err = strconv.Atoi(o); err != nil {

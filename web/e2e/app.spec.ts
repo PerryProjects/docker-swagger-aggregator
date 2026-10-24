@@ -120,6 +120,15 @@ test('Try it calls the same-origin proxy path and shows the response', async ({ 
   await expect(page.getByText(/Failed to fetch/)).toHaveCount(0)
 })
 
+test('a service that never delivered a spec is listed with its problem, not hidden', async ({ page }) => {
+  await set([alpha, { name: 'ghost', status: 'down', noSpec: true, error: 'container has no network with an IP address' }])
+  await page.goto('/')
+  const ghost = page.locator('li[data-service="ghost"]')
+  await expect(ghost).toContainText('no spec')
+  await expect(ghost).toContainText('no network with an IP address')
+  await expect(page.getByRole('complementary', { name: 'Sidebar for alpha API' })).toBeVisible() // the documented service is unaffected
+})
+
 test.describe('status page', () => {
   const broken: Svc = { name: 'ghost', status: 'down', noSpec: true, error: 'container is not attached to network "swagger-aggregator"' }
 

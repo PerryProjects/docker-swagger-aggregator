@@ -1,4 +1,5 @@
 import { onScopeDispose, readonly, ref } from 'vue'
+import { BASE } from '../base'
 
 export interface Service {
   name: string
@@ -38,13 +39,13 @@ export function useServices() {
 
   async function poll() {
     try {
-      const res = await fetch('/api/services')
+      const res = await fetch(`${BASE}api/services`)
       if (res.ok) apply(await res.json())
     } catch { /* backend unreachable; try again next tick */ }
   }
 
   function connect() {
-    es = new EventSource('/api/events')
+    es = new EventSource(`${BASE}api/events`)
     es.onopen = () => { live.value = true }
     es.addEventListener('services', (e) => apply(JSON.parse((e as MessageEvent).data)))
     es.onerror = () => {

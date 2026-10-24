@@ -82,7 +82,7 @@ func stringKeys(v any) any {
 
 // rewrite points the spec at serverURL or, if empty, at proxyPath. When proxying,
 // the path of the original server (e.g. /v1) is kept as a suffix.
-// Limitation: path- and operation-level `servers` overrides are left alone.
+// OpenAPI 3 path- and operation-level `servers` overrides are rewritten the same way.
 func rewrite(doc map[string]any, serverURL, proxyPath string, v2 bool) error {
 	if serverURL == "" {
 		return rewriteToProxy(doc, proxyPath, v2)
@@ -92,6 +92,7 @@ func rewrite(doc map[string]any, serverURL, proxyPath string, v2 bool) error {
 		return fmt.Errorf("invalid server-url %q", serverURL)
 	}
 	if !v2 {
+		rewriteServers(doc, func(any) []any { return []any{map[string]any{"url": serverURL}} })
 		doc["servers"] = []any{map[string]any{"url": serverURL}}
 		return nil
 	}
@@ -110,14 +111,41 @@ func rewriteToProxy(doc map[string]any, proxyPath string, v2 bool) error {
 		doc["basePath"] = proxyPath + cleanPrefix(prefix)
 		return nil
 	}
-	var prefix string
-	if servers, ok := doc["servers"].([]any); ok && len(servers) > 0 {
-		first, _ := servers[0].(map[string]any)
-		raw, _ := first["url"].(string)
-		prefix = pathOf(raw)
+	toProxy := func(servers any) []any {
+		var prefix string
+		if l, ok := servers.([]any); ok && len(l) > 0 {
+			first, _ := l[0].(map[string]any)
+			raw, _ := first["url"].(string)
+			prefix = pathOf(raw)
+		}
+		return []any{map[string]any{"url": proxyPath + cleanPrefix(prefix)}}
 	}
-	doc["servers"] = []any{map[string]any{"url": proxyPath + cleanPrefix(prefix)}}
+	rewriteServers(doc, toProxy)
+	doc["servers"] = toProxy(doc["servers"])
 	return nil
+}
+
+var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+
+// rewriteServers replaces the `servers` of every path item and operation that has its own.
+func rewriteServers(doc map[string]any, replace func(old any) []any) {
+	paths, _ := doc["paths"].(map[string]any)
+	for _, pi := range paths {
+		item, ok := pi.(map[string]any)
+		if !ok {
+			continue
+		}
+		if old, has := item["servers"]; has {
+			item["servers"] = replace(old)
+		}
+		for _, m := range httpMethods {
+			if op, ok := item[m].(map[string]any); ok {
+				if old, has := op["servers"]; has {
+					op["servers"] = replace(old)
+				}
+			}
+		}
+	}
 }
 
 // pathOf returns the path of an absolute or relative server URL.

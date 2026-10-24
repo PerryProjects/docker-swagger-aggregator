@@ -351,7 +351,7 @@ func (s *Source) container(svc *corev1.Service, ready bool) discovery.Container 
 		ctr.Problem = fmt.Sprintf("the Service does not expose port %d", t.Port)
 		return ctr
 	}
-	ctr.BaseURL = s.baseURL(svc, t.Port)
+	ctr.BaseURL = s.baseURL(svc, t.Port, t.Scheme)
 	ctr.SpecURL = ctr.BaseURL + t.Path
 	return ctr
 }
@@ -365,13 +365,18 @@ func hasPort(svc *corev1.Service, port uint16) bool {
 	return false
 }
 
-func (s *Source) baseURL(svc *corev1.Service, port uint16) string {
+func (s *Source) baseURL(svc *corev1.Service, port uint16, scheme string) string {
 	p := strconv.Itoa(int(port))
 	if s.cfg.Access == AccessAPIServer {
+		// The service proxy addresses https backends as "https:<name>:<port>".
+		name := url.PathEscape(svc.Name) + ":" + p
+		if scheme == "https" {
+			name = "https:" + name
+		}
 		return strings.TrimRight(s.cfg.APIServer, "/") + "/api/v1/namespaces/" + url.PathEscape(svc.Namespace) +
-			"/services/" + url.PathEscape(svc.Name) + ":" + p + "/proxy"
+			"/services/" + name + "/proxy"
 	}
-	return "http://" + svc.Name + "." + svc.Namespace + ".svc." + s.cfg.ClusterDomain + ":" + p
+	return scheme + "://" + svc.Name + "." + svc.Namespace + ".svc." + s.cfg.ClusterDomain + ":" + p
 }
 
 // readiness reports, per "namespace/service", whether any endpoint is ready.

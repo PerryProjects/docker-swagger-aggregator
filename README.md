@@ -61,6 +61,7 @@ Locally the UI port comes from `docker-compose.override.yml` (loaded automatical
 | `swagger-aggregator.name` | compose service name, else container name | display name, URL key |
 | `swagger-aggregator.server-url` | – (or derived from Traefik labels, see below) | public base URL; replaces `servers` (OpenAPI 3) or `host`/`basePath`/`schemes` (Swagger 2.0). Its path is replaced by the container root when "Try it" is proxied (like a Traefik `StripPrefix`), unless `strip-prefix` is `false` |
 | `swagger-aggregator.strip-prefix` | `true` | only with a `server-url` that has a path: `true` = the proxy in front strips that path (the workload sees `/items` for `/api/items`); `false` = it does not and the workload itself serves under it (`/api/items` stays `/api/items`) |
+| `swagger-aggregator.scheme` | `http` | `https` if the workload itself serves TLS. Its certificate is verified unless `--insecure-upstream-tls` is set (workloads are reached by IP, which certificates rarely cover) |
 | `swagger-aggregator.group` | – | shown as `group / name` in the UI, sorts first |
 | `swagger-aggregator.order` | `0` | sort key inside a group (integer) |
 
@@ -85,6 +86,8 @@ Flags or environment variables (`SWAGGER_AGGREGATOR_` prefix, `-` → `_`).
 | `--max-spec-bytes` / `SWAGGER_AGGREGATOR_MAX_SPEC_BYTES` | `10485760` | spec size limit |
 | `--shutdown-grace` / `SWAGGER_AGGREGATOR_SHUTDOWN_GRACE` | `5s` | how long in-flight requests get to finish on shutdown, then connections are closed |
 | `--label-prefix` / `SWAGGER_AGGREGATOR_LABEL_PREFIX` | `swagger-aggregator` | label namespace to watch |
+| `--base-path` / `SWAGGER_AGGREGATOR_BASE_PATH` | – | public path prefix the UI is served under, e.g. `/docs`; written into the same-origin proxy paths of the specs (`/docs/api/proxy/<id>`). Set the same value on `swagger-aggregator-web` |
+| `--insecure-upstream-tls` / `SWAGGER_AGGREGATOR_INSECURE_UPSTREAM_TLS` | `false` | skip certificate verification for workloads labeled `scheme=https` (spec fetch and "Try it") |
 | `--prefer-published-ports` / `SWAGGER_AGGREGATOR_PREFER_PUBLISHED_PORTS` | `false` | reach containers via their published host port (`127.0.0.1:<port>`) instead of the network IP |
 | `--derive-server-url` / `SWAGGER_AGGREGATOR_DERIVE_SERVER_URL` | `false` | derive a missing `server-url` from Traefik router labels (Docker, see [Traefik](#traefik)) or from Ingress/IngressRoute objects (Kubernetes) |
 | `--docker` / `SWAGGER_AGGREGATOR_DOCKER` | `true` | watch Docker containers; set `false` when running in Kubernetes without a Docker socket |
@@ -286,7 +289,8 @@ remount keeps the open document, stale hash cleanup, group/order, hide-offline, 
 Note: `vue-tsc` (typecheck) needs Node; the Docker image has none, so it builds with `bun run bundle`.
 
 `swagger-aggregator-web` flags/env: `--listen`/`SWAGGER_AGGREGATOR_WEB_LISTEN` (`:3000`), `--dir`/`SWAGGER_AGGREGATOR_WEB_DIR` (`web/dist`),
-`--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`).
+`--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`), `--base-path`/`SWAGGER_AGGREGATOR_WEB_BASE_PATH` (none; e.g. `/docs`,
+stripped when present, so it works with or without a `StripPrefix` in front; set the same value on the API).
 
 ## Security
 
@@ -381,18 +385,17 @@ A k3d cluster, by contrast, shows its nodes as ordinary containers in `docker ps
 
 ## Known limitations
 
-- Docker events are filtered client-side by action (`start`, `die`, `stop`, `destroy`, `health_status*`); only `type` and label are filtered server-side.
-- `moby/moby/client` is **v0.x** (v0.6.2 at the time of writing); its API may still change between releases. Pinned in `go.mod`.
-- Containers with the same name (compose `scale`) get a `-<id>` suffix; names are only stable while a container runs.
-- Only `servers` / top-level `host`+`basePath`+`schemes` are rewritten; path- or operation-level `servers` are left alone.
+- `moby/moby/client` is **v0.x** (v0.6.2 is the latest release, checked 2026-10-24); its API may still change between releases. Pinned in `go.mod`.
+- Compose replicas (`scale`) are named `<name>` (replica 1) and `<name>-<n>`; other containers with the same name get a `-<id>` suffix, which is only stable while the container runs.
+- `servers` (also on path items and operations) and top-level `host`+`basePath`+`schemes` are rewritten; callback/webhook `servers` are left alone.
 - Spec parsing re-serializes the document (keys are sorted, YAML is converted to JSON). `$ref`s to *external* files are not resolved.
   Unchanged specs (identical bytes) are not re-parsed on later probes.
-- The UI shows only services whose spec was fetched at least once. A service that never delivered a spec is visible in `GET /api/services` (with `error`) but not in the UI.
-- The proxies are plain HTTP forwards to the container (no TLS to the container; redirects are passed to the browser as is).
+- A service that never delivered a spec has no document in the reference view (Scalar needs a spec); it is listed with its error in the sidebar and on `/status`.
+- The proxies are plain forwards to the container (HTTPS only with `scheme=https`; redirects are passed to the browser as is).
   A `server-url` with a path is treated like a `StripPrefix` (the workload sees the path without it) unless you set `strip-prefix: "false"`. Routes that
   rewrite the path in other ways (e.g. `ReplacePathRegex`) are not understood.
 - Kubernetes: services in different namespaces are named `<name>.<namespace>` unless `.name` is set; ingress-derived URLs need exactly one host-based route
   with the root path per Service; `ExternalName` Services and Services without ready endpoints are shown as down.
 - Last-known specs are kept only in memory: a stopped container that exists when the API restarts is listed as down *without* a spec.
-- `swagger-aggregator-web` must run in front of the API (or any reverse proxy that serves `/` from `web/dist` and `/api` from the API); the UI uses absolute `/api/...` paths.
-- `typescript` is pinned to 6.0.3: `vue-tsc` 3.3.13 does not work with TypeScript 7, nor under the Bun runtime.
+- `swagger-aggregator-web` must run in front of the API (or any reverse proxy that serves `/` from `web/dist` and `/api` from the API). Under a sub-path (`--base-path`) the proxy must forward that prefix to `swagger-aggregator-web`, which strips it itself.
+- `typescript` is aliased to `typescript-native-bridge` (a tsgo-backed TypeScript fork from the `johnsoncodehk/typescript-native-bridge` repo, pinned to an exact version): `vue-tsc` 3.3.13 does not work with TypeScript 7 yet ([vuejs/language-tools#6124](https://github.com/vuejs/language-tools/issues/6124)). Drop the alias once a `vue-tsc` release supports TypeScript 7. It is a third-party package with a native binary, used only for `bun run typecheck` (not part of the Docker image); the typecheck needs Node (it fails under `bun --bun`).

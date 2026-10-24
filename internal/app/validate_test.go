@@ -28,6 +28,10 @@ func TestValidate(t *testing.T) {
 			}
 		}, "", ""},
 
+		{"base path ok", func(c *app.Config) { c.BasePath = "/docs" }, "", ""},
+		{"base path without slash", func(c *app.Config) { c.BasePath = "docs" }, "base-path", "leading slash"},
+		{"base path trailing slash", func(c *app.Config) { c.BasePath = "/docs/" }, "base-path", "no trailing slash"},
+
 		{"listen empty", func(c *app.Config) { c.Listen = "" }, "listen", "must not be empty"},
 		{"listen without port", func(c *app.Config) { c.Listen = "localhost" }, "listen", "not host:port"},
 		{"listen bad port", func(c *app.Config) { c.Listen = ":http" }, "listen", "not a number"},

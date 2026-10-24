@@ -94,6 +94,10 @@ func (c Config) Validate() error {
 
 func (c Config) validateCommon(v *collector) {
 	validateListen(v, c.Listen)
+	if c.BasePath != "" && (!strings.HasPrefix(c.BasePath, "/") || strings.HasSuffix(c.BasePath, "/") ||
+		strings.ContainsAny(c.BasePath, "?# ")) {
+		v.addf("base-path", "%q must look like /docs (leading slash, no trailing slash)", c.BasePath)
+	}
 
 	switch {
 	case c.LabelPrefix == "":

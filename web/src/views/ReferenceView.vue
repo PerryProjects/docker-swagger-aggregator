@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { BASE } from '../base'
 import { useServices } from '../composables/useServices'
 import { assignSlugs, compareServices } from '../slug'
 
@@ -37,7 +38,7 @@ const sources = computed(() =>
       title: `${s.status === 'up' ? '🟢' : '🔴'} ${s.group ? `${s.group} / ` : ''}${s.name}`,
       slug: slugs.value.get(s.name) ?? s.name,
       // specHash busts the cache and makes Scalar refetch when the spec changes
-      url: `/api/services/${encodeURIComponent(s.name)}/spec?v=${s.specHash}`,
+      url: `${BASE}api/services/${encodeURIComponent(s.name)}/spec?v=${s.specHash}`,
     })))
 
 // Scalar jumps back to the first document whenever the ordered list of slugs
@@ -61,11 +62,15 @@ const configuration = computed(() => ({
   withDefaultFonts: false,
   telemetry: false,
   agent: { disabled: true },
-  proxyUrl: '/api/scalar-proxy',
+  proxyUrl: `${BASE}api/scalar-proxy`,
   sources: sources.value,
 }))
 
 const hasServices = computed(() => services.value.some((s) => s.specHash))
+
+// Scalar needs a spec per document, so services that never delivered one cannot be a source.
+// List them with their error instead of hiding them (they are also on /status).
+const withoutSpec = computed(() => services.value.filter((s) => !s.specHash).sort(compareServices))
 </script>
 
 <template>
@@ -75,7 +80,13 @@ const hasServices = computed(() => services.value.some((s) => s.specHash))
         <input v-model="hideOffline" type="checkbox" />
         Hide offline services
       </label>
-      <a class="toggle" href="/status">Service status</a>
+      <ul v-if="withoutSpec.length" class="nospec" aria-label="Services without a spec">
+        <li v-for="s in withoutSpec" :key="s.name" :data-service="s.name">
+          <span aria-hidden="true">{{ s.status === 'up' ? '🟢' : '🔴' }}</span>
+          {{ s.group ? `${s.group} / ` : '' }}{{ s.name }}: no spec{{ s.error ? ` (${s.error})` : '' }}
+        </li>
+      </ul>
+      <a class="toggle" :href="`${BASE}status`">Service status</a>
     </template>
   </ApiReference>
   <div v-else class="empty">
@@ -86,11 +97,18 @@ const hasServices = computed(() => services.value.some((s) => s.specHash))
       <input v-model="hideOffline" type="checkbox" />
       Hide offline services
     </label>
-    <a class="toggle" href="/status">Service status</a>
+    <ul v-if="withoutSpec.length" class="nospec" aria-label="Services without a spec">
+      <li v-for="s in withoutSpec" :key="s.name" :data-service="s.name">
+        <span aria-hidden="true">{{ s.status === 'up' ? '🟢' : '🔴' }}</span>
+        {{ s.group ? `${s.group} / ` : '' }}{{ s.name }}: no spec{{ s.error ? ` (${s.error})` : '' }}
+      </li>
+    </ul>
+    <a class="toggle" :href="`${BASE}status`">Service status</a>
   </div>
 </template>
 
 <style scoped>
+.nospec { list-style: none; margin: 0; padding: 0.5rem 1rem; font: 13px system-ui, sans-serif; color: #666; overflow-wrap: anywhere; }
 .empty { font-family: system-ui, sans-serif; color: #666; text-align: center; margin-top: 20vh; }
 .toggle { display: flex; gap: 0.5rem; align-items: center; justify-content: center; padding: 0.5rem 1rem; font: 13px system-ui, sans-serif; cursor: pointer; }
 </style>

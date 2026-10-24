@@ -74,6 +74,9 @@ func registerFlags(f *pflag.FlagSet, def app.Config) {
 	f.Bool("prefer-published-ports", def.PreferPublishedPorts,
 		"reach containers via their published host port (127.0.0.1) instead of the network IP; "+
 			"for running on the host with Docker Desktop")
+	f.String("base-path", def.BasePath, "public path prefix the UI is served under, e.g. /docs (default: /)")
+	f.Bool("insecure-upstream-tls", def.InsecureUpstreamTLS,
+		"skip certificate verification for workloads labeled scheme=https (they are reached by IP)")
 	f.Bool("docker", def.DockerEnabled,
 		"watch Docker containers (disable when running inside Kubernetes without a Docker socket)")
 	f.Bool("kubernetes", def.Kubernetes.Enabled, "watch Kubernetes Services")
@@ -145,6 +148,8 @@ func loadConfig(v *viper.Viper) (app.Config, error) {
 		ShutdownGrace:        s.duration("shutdown-grace"),
 		DeriveServerURL:      s.boolean("derive-server-url"),
 		PreferPublishedPorts: s.boolean("prefer-published-ports"),
+		InsecureUpstreamTLS:  s.boolean("insecure-upstream-tls"),
+		BasePath:             strings.TrimRight(v.GetString("base-path"), "/"),
 		DockerEnabled:        s.boolean("docker"),
 		Kubernetes: app.KubernetesConfig{
 			Enabled:       s.boolean("kubernetes"),

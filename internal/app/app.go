@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,12 @@ type Config struct {
 	ShutdownGrace        time.Duration // how long in-flight requests get to finish on shutdown
 	DeriveServerURL      bool          // derive server-url from Traefik labels / Ingress / IngressRoute
 	PreferPublishedPorts bool
+	// InsecureUpstreamTLS skips certificate verification for workloads labeled scheme=https
+	// (workloads are reached by IP, which their certificates rarely cover).
+	InsecureUpstreamTLS bool
+	// BasePath is the public path prefix the UI is served under ("" or "/docs"); it only affects the
+	// same-origin proxy paths written into the specs.
+	BasePath string
 
 	DockerEnabled bool // watch Docker containers
 	Kubernetes    KubernetesConfig
@@ -151,23 +158,35 @@ func New(cfg Config, deps Deps) (*App, error) {
 	a.mgr = discovery.NewManager(discovery.ManagerConfig{
 		Store: reg,
 		Fetcher: fetcher.New(fetcher.Config{
-			Client:   &http.Client{Timeout: cfg.FetchTimeout, Transport: &transport.Mux{ByHost: byHost}},
+			Client: &http.Client{
+				Timeout:   cfg.FetchTimeout,
+				Transport: &transport.Mux{Default: upstreamTransport(cfg), ByHost: byHost},
+			},
 			MaxBytes: cfg.MaxSpecBytes,
 		}),
 		Prepare: func(raw []byte, serverURL, id string) ([]byte, error) {
-			return fetcher.Prepare(raw, serverURL, server.ProxyPath(id))
+			return fetcher.Prepare(raw, serverURL, server.ProxyPath(cfg.BasePath, id))
 		},
 		Log:      log,
 		Interval: cfg.ProbeInterval,
 	})
 	upstream := deps.Transport
 	if upstream == nil {
-		upstream = server.NewUpstreamTransport()
+		upstream = upstreamTransport(cfg)
 	}
 	a.handler = server.New(server.Config{
-		Store: reg, Log: log, Transport: &transport.Mux{Default: upstream, ByHost: byHost},
+		Store: reg, Log: log, BasePath: cfg.BasePath, Transport: &transport.Mux{Default: upstream, ByHost: byHost},
 	}).Handler()
 	return a, nil
+}
+
+// upstreamTransport reaches the workloads (spec fetch and Try-it proxies).
+func upstreamTransport(cfg Config) *http.Transport {
+	t := server.NewUpstreamTransport()
+	if cfg.InsecureUpstreamTLS {
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in, workload traffic only
+	}
+	return t
 }
 
 // newKubernetesSource builds the clients (unless injected), decides how services

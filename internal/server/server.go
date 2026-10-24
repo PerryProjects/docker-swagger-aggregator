@@ -47,6 +47,8 @@ type Config struct {
 	// Transport is used to reach the workloads for the proxies. Defaults to
 	// NewUpstreamTransport().
 	Transport http.RoundTripper
+	// BasePath is the public prefix the UI and API are served under ("" or "/docs"), see ProxyPath.
+	BasePath string
 	// Heartbeat is the SSE keep-alive interval (default 15s).
 	Heartbeat time.Duration
 	// MaxProxyBody limits proxied request bodies in bytes (default 10 MiB).

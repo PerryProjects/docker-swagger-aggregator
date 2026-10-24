@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref } from 'vue'
+import { BASE } from '../base'
 import { useServices } from '../composables/useServices'
 import { assignSlugs, compareServices } from '../slug'
 
@@ -31,7 +32,7 @@ function ago(iso?: string): string {
   <main class="status">
     <header>
       <h1>Service status</h1>
-      <a href="/">Documentation</a>
+      <a :href="BASE">Documentation</a>
     </header>
 
     <p v-if="!loaded" role="status">Loading…</p>
@@ -48,7 +49,7 @@ function ago(iso?: string): string {
             <td :class="s.status"><span aria-hidden="true">{{ s.status === 'up' ? '🟢' : '🔴' }}</span> {{ s.status }}</td>
             <td>{{ s.status === 'up' ? 'now' : ago(s.lastSeen) }}</td>
             <td class="problem">{{ s.error ?? '' }}</td>
-            <td><a v-if="s.specHash" :href="`/#${slugs.get(s.name)}`">Open docs</a></td>
+            <td><a v-if="s.specHash" :href="`${BASE}#${slugs.get(s.name)}`">Open docs</a></td>
           </tr>
         </tbody>
       </table>

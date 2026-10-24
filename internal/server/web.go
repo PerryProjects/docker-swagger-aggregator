@@ -17,6 +17,9 @@ type WebConfig struct {
 	API *url.URL
 	// Transport reaches the API (default: http.DefaultTransport).
 	Transport http.RoundTripper
+	// BasePath is the public prefix the UI is served under ("" or "/docs"). It is stripped
+	// when present, so it works whether or not the reverse proxy in front strips it.
+	BasePath string
 }
 
 // NewWebHandler serves the built UI and forwards /api/ to the API, so the
@@ -31,7 +34,23 @@ func NewWebHandler(cfg WebConfig) http.Handler {
 		BufferPool:    newBufferPool(),
 	})
 	mux.Handle("/", spa(cfg.UI))
-	return securityHeaders(mux)
+	return securityHeaders(stripBasePath(cfg.BasePath, mux))
+}
+
+// stripBasePath removes the public prefix from the request path (a no-op for "").
+func stripBasePath(base string, next http.Handler) http.Handler {
+	if base == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, ok := strings.CutPrefix(r.URL.Path, base); ok && (rest == "" || rest[0] == '/') {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/" + strings.TrimPrefix(rest, "/")
+			r2.URL.RawPath = ""
+			r = r2
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // securityHeaders sets conservative defaults for everything the web server

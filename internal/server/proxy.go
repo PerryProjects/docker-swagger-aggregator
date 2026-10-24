@@ -84,7 +84,7 @@ func (s *Server) byPublicURL() http.Handler {
 		// Scalar also sends our own relative /api/proxy/<id> servers through here once
 		// it has resolved them to absolute URLs. Only the path matters: the host is
 		// never contacted, so this grants nothing beyond calling /api/proxy/<id> directly.
-		if rest, found := strings.CutPrefix(target.Path, "/api/proxy/"); found {
+		if rest, found := strings.CutPrefix(target.Path, s.cfg.BasePath+"/api/proxy/"); found {
 			id, path, _ := strings.Cut(rest, "/")
 			s.forwardToID(w, r, id, path, target.RawQuery)
 			return
@@ -115,5 +115,6 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, target *url.URL
 	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), targetKey{}, target)))
 }
 
-// ProxyPath is the same-origin path under which the API proxies a workload.
-func ProxyPath(id string) string { return "/api/proxy/" + id }
+// ProxyPath is the same-origin path under which the API proxies a workload. basePath is the public
+// prefix the UI is served under ("" or "/docs").
+func ProxyPath(basePath, id string) string { return basePath + "/api/proxy/" + id }

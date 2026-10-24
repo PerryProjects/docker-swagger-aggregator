@@ -154,3 +154,27 @@ func TestServerURLWinsOverProxy(t *testing.T) {
 		t.Fatalf("servers url = %v", u)
 	}
 }
+
+func TestRewritePathAndOperationServers(t *testing.T) {
+	t.Parallel()
+	const spec = `{"openapi":"3.0.3","servers":[{"url":"http://a/v1"}],"paths":{
+		"/p":{"servers":[{"url":"http://b/p1"}],"get":{"servers":[{"url":"http://c/op"}]},"post":{}}}}`
+	urlAt := func(m map[string]any, keys ...string) any {
+		var cur any = m
+		for _, k := range append(keys, "servers") {
+			cur = cur.(map[string]any)[k]
+		}
+		return cur.([]any)[0].(map[string]any)["url"]
+	}
+	m := prep(t, spec, "https://api.example.com")
+	if urlAt(m, "paths", "/p") != "https://api.example.com" || urlAt(m, "paths", "/p", "get") != "https://api.example.com" {
+		t.Fatalf("server-url: %v", m["paths"])
+	}
+	m = prep(t, spec, "", "/proxy/x")
+	if urlAt(m, "paths", "/p") != "/proxy/x/p1" || urlAt(m, "paths", "/p", "get") != "/proxy/x/op" {
+		t.Fatalf("proxy: %v", m["paths"])
+	}
+	if _, has := m["paths"].(map[string]any)["/p"].(map[string]any)["post"].(map[string]any)["servers"]; has {
+		t.Fatal("operation without servers must stay without")
+	}
+}

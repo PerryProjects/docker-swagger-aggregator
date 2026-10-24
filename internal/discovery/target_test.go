@@ -31,21 +31,21 @@ func TestParseTarget(t *testing.T) {
 			"defaults", with(),
 			[]string{"", "my-app"},
 			[]uint16{8000, 9000},
-			discovery.Target{Name: "my-app", Port: 8000, Path: "/openapi.json"},
+			discovery.Target{Name: "my-app", Port: 8000, Path: "/openapi.json", Scheme: "http"},
 			false,
 		},
 		{
 			"first non-empty fallback wins", with(),
 			[]string{"billing", "proj-billing-1"},
 			[]uint16{80},
-			discovery.Target{Name: "billing", Port: 80, Path: "/openapi.json"},
+			discovery.Target{Name: "billing", Port: 80, Path: "/openapi.json", Scheme: "http"},
 			false,
 		},
 		{
 			"name attribute beats fallbacks", with(p+".name", "Billing API"),
 			[]string{"billing"},
 			[]uint16{80},
-			discovery.Target{Name: "Billing API", Port: 80, Path: "/openapi.json"},
+			discovery.Target{Name: "Billing API", Port: 80, Path: "/openapi.json", Scheme: "http"},
 			false,
 		},
 		{
@@ -53,14 +53,14 @@ func TestParseTarget(t *testing.T) {
 			with(p+".port", "3000", p+".path", "docs/spec.yaml", p+".server-url", "https://api.example.com/v1"),
 			[]string{"x"},
 			nil,
-			discovery.Target{Name: "x", Port: 3000, Path: "/docs/spec.yaml", ServerURL: "https://api.example.com/v1"},
+			discovery.Target{Name: "x", Port: 3000, Path: "/docs/spec.yaml", Scheme: "http", ServerURL: "https://api.example.com/v1"},
 			false,
 		},
 		{
 			"group and order", with(p+".group", "payments", p+".order", "-2"),
 			[]string{"x"},
 			[]uint16{80},
-			discovery.Target{Name: "x", Port: 80, Path: "/openapi.json", Group: "payments", Order: -2},
+			discovery.Target{Name: "x", Port: 80, Path: "/openapi.json", Scheme: "http", Group: "payments", Order: -2},
 			false,
 		},
 		{
@@ -110,7 +110,7 @@ func TestParseTargetCustomPrefix(t *testing.T) {
 		p + ".enable": "true", // another instance's attributes must not matter
 	}
 	got, err := discovery.ParseTarget("staging.docs", attrs, nil, nil)
-	want := discovery.Target{Name: "Orders (staging)", Port: 9000, Path: "/openapi.json"}
+	want := discovery.Target{Name: "Orders (staging)", Port: 9000, Path: "/openapi.json", Scheme: "http"}
 	if err != nil || got != want {
 		t.Fatalf("got %+v, %v; want %+v", got, err, want)
 	}
@@ -127,5 +127,19 @@ func TestParseTargetCustomPrefix(t *testing.T) {
 	}
 	if got := discovery.EnableKey("a.b"); got != "a.b.enable" {
 		t.Errorf("EnableKey = %q", got)
+	}
+}
+
+func TestParseTargetScheme(t *testing.T) {
+	t.Parallel()
+
+	attrs := map[string]string{p + ".enable": "true", p + ".port": "443", p + ".scheme": "https"}
+	got, err := discovery.ParseTarget(p, attrs, []string{"x"}, nil)
+	if err != nil || got.Scheme != "https" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	attrs[p+".scheme"] = "ftp"
+	if _, err = discovery.ParseTarget(p, attrs, []string{"x"}, nil); err == nil {
+		t.Fatal("ftp must be rejected")
 	}
 }

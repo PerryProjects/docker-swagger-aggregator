@@ -3,7 +3,7 @@ import ReferenceView from './views/ReferenceView.vue'
 import StatusView from './views/StatusView.vue'
 
 // Path-based on purpose: Scalar owns the URL hash, so hash routing would clash.
-const isStatus = location.pathname.replace(/\/+$/, '') === '/status'
+const isStatus = /\/status\/?$/.test(location.pathname)
 </script>
 
 <template>

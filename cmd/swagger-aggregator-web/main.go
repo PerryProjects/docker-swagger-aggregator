@@ -51,6 +51,7 @@ func newCmd() *cobra.Command {
 	f.String("listen", defaultListen, "HTTP listen address")
 	f.String("dir", "web/dist", "directory with the built UI")
 	f.String("api", "http://localhost:8080", "base URL of the swagger-aggregator API")
+	f.String("base-path", "", "public path prefix the UI is served under, e.g. /docs (default: served at /)")
 	f.String("log-level", "info", "debug, info, warn or error")
 	f.String("log-format", logging.FormatConsole, "console (human readable) or json (for log collectors)")
 	v.SetEnvPrefix(envPrefix)
@@ -92,13 +93,18 @@ func run(parent context.Context, v *viper.Viper) error {
 		return fmt.Errorf("no built UI in %q (run `bun run build` in web/): %w", dir, err)
 	}
 
+	base := strings.TrimRight(v.GetString("base-path"), "/")
+	if base != "" && (!strings.HasPrefix(base, "/") || strings.ContainsAny(base, "?# ")) {
+		return fmt.Errorf("invalid --base-path %q (want e.g. /docs)", v.GetString("base-path"))
+	}
+
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// No WriteTimeout: it would kill the proxied SSE stream.
 	srv := &http.Server{
 		Addr:              v.GetString("listen"),
-		Handler:           server.NewWebHandler(server.WebConfig{UI: os.DirFS(dir), API: api}),
+		Handler:           server.NewWebHandler(server.WebConfig{UI: os.DirFS(dir), API: api, BasePath: base}),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 	go func() {

@@ -5,6 +5,7 @@ import vue from '@vitejs/plugin-vue'
 const backend = process.env.SWAGGER_AGGREGATOR_BACKEND ?? 'http://localhost:8080'
 
 export default defineConfig({
+  base: './', // relative asset URLs: the same build works under any public path prefix (--base-path)
   plugins: [vue()],
   build: { chunkSizeWarningLimit: 2000 }, // Scalar is one big chunk; it is embedded, not downloaded cold
   server: { proxy: { '/api': backend } },

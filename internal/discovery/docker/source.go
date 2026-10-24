@@ -22,9 +22,15 @@ import (
 
 const (
 	composeServiceLabel = "com.docker.compose.service"
+	composeNumberLabel  = "com.docker.compose.container-number"
 	maxBackoff          = 30 * time.Second
 	stableAfter         = time.Minute
 )
+
+// watchedActions are the container events the daemon is asked for. "health_status" is matched by
+// prefix daemon-side (the event is named "health_status: healthy"). handle checks again, so a
+// daemon that ignores the filter only costs traffic.
+var watchedActions = []string{"start", "die", "stop", "destroy", "health_status"}
 
 // API is the part of the Docker client the source uses; *client.Client implements it.
 type API interface {
@@ -109,7 +115,7 @@ func (s *Source) session(ctx context.Context, h discovery.Handler) error {
 	// second-granular, so a few events may replay; Apply is idempotent.
 	ev := s.api.Events(ctx, client.EventsListOptions{
 		Since:   strconv.FormatInt(time.Now().Unix(), 10),
-		Filters: client.Filters{}.Add("type", "container").Add("label", s.enableFilter()),
+		Filters: client.Filters{}.Add("type", "container").Add("label", s.enableFilter()).Add("event", watchedActions...),
 	})
 
 	list, err := s.api.ContainerList(ctx, client.ContainerListOptions{
@@ -193,14 +199,14 @@ func (s *Source) toContainer(res client.ContainerInspectResult) (discovery.Conta
 		// Invalid labels: show the service as down with the reason, under the name it would have had.
 		return discovery.Container{
 			ID:      i.ID,
-			Name:    s.displayName(i.Config.Labels, name),
+			Name:    replicaName(s.displayName(i.Config.Labels, name), i.Config.Labels),
 			Running: i.State.Running,
 			Problem: err.Error(),
 		}, true
 	}
 
 	c := discovery.Container{
-		ID: i.ID, Name: t.Name, Running: i.State.Running, ServerURL: t.ServerURL,
+		ID: i.ID, Name: replicaName(t.Name, i.Config.Labels), Running: i.State.Running, ServerURL: t.ServerURL,
 		Group: t.Group, Order: t.Order, KeepServerPath: t.KeepServerPath,
 	}
 	if i.State.Health != nil && i.State.Health.Status != "none" {
@@ -213,6 +219,15 @@ func (s *Source) toContainer(res client.ContainerInspectResult) (discovery.Conta
 		s.resolveAddress(&c, i.NetworkSettings, t)
 	}
 	return c, true
+}
+
+// replicaName gives compose replicas (`--scale`) stable names: replica 1 keeps the name, replica n>1 gets
+// "-n" (instead of the registry's container-ID suffix, which depends on start order).
+func replicaName(name string, labels map[string]string) string {
+	if n := labels[composeNumberLabel]; n != "" && n != "1" {
+		return name + "-" + n
+	}
+	return name
 }
 
 // displayName is the name a container with unparsable labels would have had: the name label, else the compose
@@ -240,7 +255,7 @@ func exposedTCPPorts(cfg *container.Config) []uint16 {
 // resolveAddress sets BaseURL/SpecURL (or Problem) from the published port or the network IP.
 func (s *Source) resolveAddress(c *discovery.Container, ns *container.NetworkSettings, t discovery.Target) {
 	if s.cfg.PreferPublishedPorts {
-		if base, ok := publishedBase(ns.Ports, t.Port); ok {
+		if base, ok := publishedBase(ns.Ports, t.Port, t.Scheme); ok {
 			c.BaseURL, c.SpecURL = base, base+t.Path
 			return
 		}
@@ -250,7 +265,7 @@ func (s *Source) resolveAddress(c *discovery.Container, ns *container.NetworkSet
 		c.Problem = err.Error()
 		return
 	}
-	c.BaseURL = "http://" + net.JoinHostPort(ip, strconv.Itoa(int(t.Port)))
+	c.BaseURL = t.Scheme + "://" + net.JoinHostPort(ip, strconv.Itoa(int(t.Port)))
 	c.SpecURL = c.BaseURL + t.Path
 }
 
@@ -275,8 +290,8 @@ func (s *Source) containerIP(nets map[string]*network.EndpointSettings) (string,
 	return "", errors.New("container has no network with an IP address")
 }
 
-// publishedBase returns http://127.0.0.1:<hostport> for a published tcp port.
-func publishedBase(ports network.PortMap, port uint16) (string, bool) {
+// publishedBase returns <scheme>://127.0.0.1:<hostport> for a published tcp port.
+func publishedBase(ports network.PortMap, port uint16, scheme string) (string, bool) {
 	for p, bindings := range ports {
 		if p.Num() != port || p.Proto() != network.TCP {
 			continue
@@ -289,7 +304,7 @@ func publishedBase(ports network.PortMap, port uint16) (string, bool) {
 			if b.HostIP.IsValid() && !b.HostIP.IsUnspecified() {
 				host = b.HostIP.String()
 			}
-			return "http://" + net.JoinHostPort(host, b.HostPort), true
+			return scheme + "://" + net.JoinHostPort(host, b.HostPort), true
 		}
 	}
 	return "", false

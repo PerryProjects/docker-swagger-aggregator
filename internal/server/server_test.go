@@ -426,3 +426,24 @@ func TestProxyByIDKeepsBasePathPrefix(t *testing.T) {
 		t.Fatalf("upstream path %q, want %q", gotPath, want)
 	}
 }
+
+func TestWebBasePathIsStrippedWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	ui := fstest.MapFS{"index.html": {Data: []byte("INDEX")}, "assets/a.js": {Data: []byte("JS")}}
+	apiURL, _ := url.Parse("http://127.0.0.1:1")
+	h := server.NewWebHandler(server.WebConfig{UI: ui, API: apiURL, BasePath: "/docs"})
+	for path, want := range map[string]string{
+		"/docs/assets/a.js": "JS", "/assets/a.js": "JS", // with and without the prefix (proxy may strip it)
+		"/docs/status": "INDEX", "/docs": "INDEX", "/docs/": "INDEX",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if got := rec.Body.String(); got != want {
+			t.Errorf("%s: body %q, want %q", path, got, want)
+		}
+	}
+	if got := server.ProxyPath("/docs", "c1"); got != "/docs/api/proxy/c1" {
+		t.Errorf("ProxyPath = %q", got)
+	}
+}
