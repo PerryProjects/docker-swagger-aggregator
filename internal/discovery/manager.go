@@ -13,7 +13,7 @@ import (
 
 // Store is what the manager needs from the registry.
 type Store interface {
-	Upsert(name, id string, running bool, health string)
+	UpsertReplica(name, id, replicaKey string, running bool, health string)
 	SetRoute(id string, up registry.Upstream)
 	SetMeta(id, group string, order int)
 	SetProblem(id, msg string)
@@ -68,7 +68,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 
 // Apply implements Handler.
 func (m *Manager) Apply(ctx context.Context, c Container) {
-	m.cfg.Store.Upsert(c.Name, c.ID, c.Running, c.Health)
+	m.cfg.Store.UpsertReplica(c.Name, c.ID, c.Replica, c.Running, c.Health)
 	m.cfg.Store.SetRoute(
 		c.ID,
 		registry.Upstream{Base: c.BaseURL, PublicURL: c.ServerURL, KeepPublicPath: c.KeepServerPath},

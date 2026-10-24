@@ -296,23 +296,29 @@ func TestListErrorTriggersRetryNotCrash(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool { _, ok := rec.get("c1"); return ok })
 }
 
-func TestComposeReplicasGetStableNumberSuffix(t *testing.T) {
+func TestComposeReplicasShareOneNameAndReplicaKey(t *testing.T) {
 	t.Parallel()
 
 	api := newFakeAPI()
 	for id, n := range map[string]string{"c1": "1", "c2": "2"} {
 		api.set(inspect(id, "proj-orders-"+n, true, with(map[string]string{
 			"com.docker.compose.container-number": n,
-			"swagger-aggregator.name":             "orders",
-		}), onNetwork("n", "10.0.0.1"), exposing("8000/tcp")))
+			"com.docker.compose.service":          "orders",
+			"com.docker.compose.project":          "proj",
+		}), onNetwork("n", "10.0.0."+n), exposing("8000/tcp")))
 	}
+	api.set(inspect("c3", "solo", true, with(nil), onNetwork("n", "10.0.0.9"), exposing("8000/tcp")))
 	rec := run(t, api, docker.Config{})
 
-	waitFor(t, time.Second, func() bool { _, a := rec.get("c1"); _, b := rec.get("c2"); return a && b })
+	waitFor(t, time.Second, func() bool { _, a := rec.get("c1"); _, b := rec.get("c2"); _, c := rec.get("c3"); return a && b && c })
 	c1, _ := rec.get("c1")
 	c2, _ := rec.get("c2")
-	if c1.Name != "orders" || c2.Name != "orders-2" {
-		t.Fatalf("names = %q, %q", c1.Name, c2.Name)
+	c3, _ := rec.get("c3")
+	if c1.Name != "orders" || c2.Name != "orders" || c1.Replica != "proj/orders" || c1.Replica != c2.Replica {
+		t.Fatalf("replicas: %+v / %+v", c1, c2)
+	}
+	if c3.Replica != "" {
+		t.Fatalf("a container outside compose is no replica: %+v", c3)
 	}
 }
 

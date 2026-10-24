@@ -42,6 +42,7 @@ type Upstream struct {
 type entry struct {
 	svc       Service
 	id        string
+	key       string // replica key: entries of one name with the same non-empty key are replicas of one service
 	in        status.Inputs
 	spec      []byte
 	base      string   // Upstream.Base
@@ -55,15 +56,16 @@ type Config struct {
 	Now func() time.Time
 }
 
-// Registry is safe for concurrent use. Services are identified by an opaque ID
-// (a container ID, a Kubernetes UID, ...) and addressed by their unique name.
+// Registry is safe for concurrent use. Workloads are identified by an opaque ID
+// (a container ID, a Kubernetes UID, ...); a service is addressed by its unique name and
+// consists of one workload or, for replicas, several (see UpsertReplica).
 type Registry struct {
 	now     func() time.Time
 	version atomic.Uint64
 
 	mu      sync.RWMutex
-	entries map[string]*entry // by ID
-	byName  map[string]*entry
+	entries map[string]*entry   // by ID
+	byName  map[string][]*entry // replicas of one service, in arrival order
 	subs    map[chan struct{}]struct{}
 }
 
@@ -76,7 +78,7 @@ func New(cfg Config) *Registry {
 	return &Registry{
 		now:     now,
 		entries: map[string]*entry{},
-		byName:  map[string]*entry{},
+		byName:  map[string][]*entry{},
 		subs:    map[chan struct{}]struct{}{},
 	}
 }
@@ -86,25 +88,25 @@ func New(cfg Config) *Registry {
 //
 // Name collisions: a running workload owns its name. A new one with the name of
 // a stopped one replaces it (e.g. compose recreate) and inherits the last known
-// spec; with a running one it gets a "-<id>" suffix (replicas).
+// spec; with a running one it gets a "-<id>" suffix.
 func (r *Registry) Upsert(name, id string, running bool, health string) {
+	r.UpsertReplica(name, id, "", running, health)
+}
+
+// UpsertReplica is Upsert for workloads that may be replicas (e.g. compose `--scale`): a new workload
+// whose name is owned by a running one with the same non-empty replicaKey joins it. The replicas show as
+// one service that is up while any replica is up.
+func (r *Registry) UpsertReplica(name, id, replicaKey string, running bool, health string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	e := r.entries[id]
 	if e == nil {
-		e = &entry{id: id}
-		if old := r.byName[name]; old != nil {
-			if old.in.Running {
-				name += "-" + shortID(id)
-			} else {
-				e.spec, e.svc.SpecHash, e.svc.LastSeen = old.spec, old.svc.SpecHash, old.svc.LastSeen
-				r.drop(old)
-			}
-		}
+		e = &entry{id: id, key: replicaKey}
+		name = r.claimName(e, name)
 		e.svc.Name = name
 		r.entries[id] = e
-		r.byName[name] = e
+		r.byName[name] = append(r.byName[name], e)
 	}
 	r.mutate(e, func() {
 		e.in.Running = running
@@ -113,6 +115,28 @@ func (r *Registry) Upsert(name, id string, running bool, health string) {
 			e.in.ProbeOK = false
 		}
 	})
+}
+
+// claimName decides under which name a new entry is registered (see Upsert/UpsertReplica).
+// Callers hold r.mu for writing.
+func (r *Registry) claimName(e *entry, name string) string {
+	group := r.byName[name]
+	if len(group) == 0 {
+		return name
+	}
+	if slices.ContainsFunc(group, func(o *entry) bool { return o.in.Running }) {
+		if e.key != "" && group[0].key == e.key {
+			return name // a replica of the running service
+		}
+		return name + "-" + shortID(e.id)
+	}
+	// Only stopped workloads own the name: the new one replaces them and inherits the last known spec.
+	old := r.representative(group)
+	e.spec, e.svc.SpecHash, e.svc.LastSeen = old.spec, old.svc.SpecHash, old.svc.LastSeen
+	for _, o := range slices.Clone(group) {
+		r.drop(o)
+	}
+	return name
 }
 
 // SetRoute records where the workload can be reached and, optionally, the public
@@ -244,9 +268,11 @@ func (r *Registry) Retain(ids map[string]bool) {
 // List returns all services sorted by name.
 func (r *Registry) List() []Service {
 	r.mu.RLock()
-	out := make([]Service, 0, len(r.entries))
-	for _, e := range r.entries {
-		out = append(out, e.svc)
+	out := make([]Service, 0, len(r.byName))
+	for name := range r.byName {
+		if svc, ok := r.view(name); ok {
+			out = append(out, svc)
+		}
 	}
 	r.mu.RUnlock()
 	slices.SortFunc(out, func(a, b Service) int { return strings.Compare(a.Name, b.Name) })
@@ -257,11 +283,51 @@ func (r *Registry) List() []Service {
 func (r *Registry) Spec(name string) ([]byte, string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	e := r.byName[name]
-	if e == nil {
+	group := r.byName[name]
+	if len(group) == 0 {
 		return nil, "", false
 	}
-	return e.spec, e.svc.SpecHash, true
+	rep := r.representative(group)
+	return rep.spec, rep.svc.SpecHash, true
+}
+
+// representative is the replica a service is shown (and documented) by: the first one that is up and
+// has a spec, else the first one up, else the one seen last. Callers hold r.mu.
+func (r *Registry) representative(group []*entry) *entry {
+	best := group[0]
+	rank := func(e *entry) int {
+		switch {
+		case e.svc.Status == status.Up && e.spec != nil:
+			return 3
+		case e.svc.Status == status.Up:
+			return 2
+		case e.spec != nil:
+			return 1
+		}
+		return 0
+	}
+	for _, e := range group[1:] {
+		switch {
+		case rank(e) > rank(best):
+			best = e
+		case rank(e) == rank(best) && rank(e) < 2 && seenAfter(e, best):
+			best = e // among down replicas show the most recently seen one
+		}
+	}
+	return best
+}
+
+func seenAfter(a, b *entry) bool {
+	return a.svc.LastSeen != nil && (b.svc.LastSeen == nil || a.svc.LastSeen.After(*b.svc.LastSeen))
+}
+
+// view is the public Service of a name: its representative replica. Callers hold r.mu.
+func (r *Registry) view(name string) (Service, bool) {
+	group := r.byName[name]
+	if len(group) == 0 {
+		return Service{}, false
+	}
+	return r.representative(group).svc, true
 }
 
 // Version increases whenever the visible service list changes. Callers can use
@@ -300,22 +366,26 @@ func (r *Registry) update(id string, f func(*entry)) {
 // drop removes e from both indexes. Callers hold r.mu for writing.
 func (r *Registry) drop(e *entry) {
 	delete(r.entries, e.id)
-	if r.byName[e.svc.Name] == e {
+	group := slices.DeleteFunc(slices.Clone(r.byName[e.svc.Name]), func(o *entry) bool { return o == e })
+	if len(group) == 0 {
 		delete(r.byName, e.svc.Name)
+		return
 	}
+	r.byName[e.svc.Name] = group
 }
 
 // mutate applies f, recomputes the status and notifies subscribers if the
-// visible state changed. LastSeen alone does not count as a change: it only
+// visible state of the service changed. LastSeen alone does not count as a change: it only
 // moves on successful probes, which would otherwise emit an event per probe.
 // Callers hold r.mu for writing.
 func (r *Registry) mutate(e *entry, f func()) {
-	before := e.svc
+	before, hadBefore := r.view(e.svc.Name)
 	f()
 	e.svc.Status = status.Compute(e.in)
-	if before.Name != e.svc.Name || before.Status != e.svc.Status ||
-		before.SpecHash != e.svc.SpecHash || before.Error != e.svc.Error ||
-		before.Group != e.svc.Group || before.Order != e.svc.Order {
+	after, _ := r.view(e.svc.Name)
+	if !hadBefore || before.Name != after.Name || before.Status != after.Status ||
+		before.SpecHash != after.SpecHash || before.Error != after.Error ||
+		before.Group != after.Group || before.Order != after.Order {
 		r.notify()
 	}
 }

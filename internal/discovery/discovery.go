@@ -20,6 +20,9 @@ type Container struct {
 	Problem   string // e.g. invalid labels or not attached to the network
 	Group     string
 	Order     int
+	// Replica groups workloads that are replicas of one service (same non-empty value = same service),
+	// so they show up as a single API. Empty: not a replica.
+	Replica string
 	// KeepServerPath is Target.KeepServerPath.
 	KeepServerPath bool
 }

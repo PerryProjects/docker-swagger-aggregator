@@ -23,6 +23,7 @@ import (
 const (
 	composeServiceLabel = "com.docker.compose.service"
 	composeNumberLabel  = "com.docker.compose.container-number"
+	composeProjectLabel = "com.docker.compose.project"
 	maxBackoff          = 30 * time.Second
 	stableAfter         = time.Minute
 )
@@ -199,14 +200,14 @@ func (s *Source) toContainer(res client.ContainerInspectResult) (discovery.Conta
 		// Invalid labels: show the service as down with the reason, under the name it would have had.
 		return discovery.Container{
 			ID:      i.ID,
-			Name:    replicaName(s.displayName(i.Config.Labels, name), i.Config.Labels),
+			Name:    s.displayName(i.Config.Labels, name),
 			Running: i.State.Running,
 			Problem: err.Error(),
 		}, true
 	}
 
 	c := discovery.Container{
-		ID: i.ID, Name: replicaName(t.Name, i.Config.Labels), Running: i.State.Running, ServerURL: t.ServerURL,
+		ID: i.ID, Name: t.Name, Replica: replicaKey(i.Config.Labels), Running: i.State.Running, ServerURL: t.ServerURL,
 		Group: t.Group, Order: t.Order, KeepServerPath: t.KeepServerPath,
 	}
 	if i.State.Health != nil && i.State.Health.Status != "none" {
@@ -221,13 +222,13 @@ func (s *Source) toContainer(res client.ContainerInspectResult) (discovery.Conta
 	return c, true
 }
 
-// replicaName gives compose replicas (`--scale`) stable names: replica 1 keeps the name, replica n>1 gets
-// "-n" (instead of the registry's container-ID suffix, which depends on start order).
-func replicaName(name string, labels map[string]string) string {
-	if n := labels[composeNumberLabel]; n != "" && n != "1" {
-		return name + "-" + n
+// replicaKey identifies the compose service a container belongs to (project + service), so that the
+// containers of a scaled service are shown as one API. Empty for containers outside compose.
+func replicaKey(labels map[string]string) string {
+	if labels[composeNumberLabel] == "" || labels[composeServiceLabel] == "" {
+		return ""
 	}
-	return name
+	return labels[composeProjectLabel] + "/" + labels[composeServiceLabel]
 }
 
 // displayName is the name a container with unparsable labels would have had: the name label, else the compose

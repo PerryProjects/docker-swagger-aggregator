@@ -386,7 +386,7 @@ A k3d cluster, by contrast, shows its nodes as ordinary containers in `docker ps
 ## Known limitations
 
 - `moby/moby/client` is **v0.x** (v0.6.2 is the latest release, checked 2026-10-24); its API may still change between releases. Pinned in `go.mod`.
-- Compose replicas (`scale`) are named `<name>` (replica 1) and `<name>-<n>`; other containers with the same name get a `-<id>` suffix, which is only stable while the container runs.
+- Compose replicas (`scale`) are one service: it is up while any replica is up and is documented by one healthy replica (the spec's "Try it" path points at that replica, and moves with it). Replicas are recognised by the compose project + service labels; unrelated containers that merely share a name get a `-<id>` suffix, which is only stable while the container runs.
 - `servers` (also on path items and operations) and top-level `host`+`basePath`+`schemes` are rewritten; callback/webhook `servers` are left alone.
 - Spec parsing re-serializes the document (keys are sorted, YAML is converted to JSON). `$ref`s to *external* files are not resolved.
   Unchanged specs (identical bytes) are not re-parsed on later probes.

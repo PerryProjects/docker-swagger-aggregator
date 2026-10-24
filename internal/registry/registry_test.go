@@ -261,3 +261,56 @@ func TestRouteKeepPublicPathForwardsTheWholePath(t *testing.T) {
 		}
 	}
 }
+
+func TestReplicasAreOneServiceUpWhileAnyReplicaIsUp(t *testing.T) {
+	t.Parallel()
+
+	r := registry.New(registry.Config{})
+	r.UpsertReplica("api", "c1", "proj/api", true, "")
+	r.UpsertReplica("api", "c2", "proj/api", true, "")
+	r.SetSpec("c1", []byte(`{"v":1}`))
+	r.SetSpec("c2", []byte(`{"v":1}`))
+
+	if l := r.List(); len(l) != 1 || l[0].Name != "api" || l[0].Status != status.Up {
+		t.Fatalf("two replicas must be one up service: %+v", l)
+	}
+	ch, unsub := r.Subscribe()
+	defer unsub()
+
+	r.UpsertReplica("api", "c1", "proj/api", false, "") // one replica stops
+	if s := get(t, r); s.Status != status.Up || s.SpecHash == "" {
+		t.Fatalf("service must stay up with its spec while another replica runs: %+v", s)
+	}
+	if signalled(ch) {
+		t.Fatal("a replica stopping must not change what the UI shows")
+	}
+
+	r.UpsertReplica("api", "c2", "proj/api", false, "") // the last one stops
+	if s := get(t, r); s.Status != status.Down || s.SpecHash == "" {
+		t.Fatalf("all replicas down: down with the last known spec: %+v", s)
+	}
+	if !signalled(ch) {
+		t.Fatal("the service going down must notify")
+	}
+
+	r.Remove("c1")
+	if len(r.List()) != 1 {
+		t.Fatal("removing one replica keeps the service")
+	}
+	r.Remove("c2")
+	if len(r.List()) != 0 {
+		t.Fatal("removing the last replica removes the service")
+	}
+}
+
+func TestSameNameWithoutMatchingReplicaKeyStaysSeparate(t *testing.T) {
+	t.Parallel()
+
+	r := registry.New(registry.Config{})
+	r.UpsertReplica("api", "c1", "proj-a/api", true, "")
+	r.UpsertReplica("api", "c2", "proj-b/api", true, "") // another project: not a replica
+	r.Upsert("api", "c3", true, "")                      // no key at all
+	if l := r.List(); len(l) != 3 {
+		t.Fatalf("unrelated services with one name must not merge: %+v", l)
+	}
+}
