@@ -3,7 +3,7 @@ package store
 import "github.com/perryprojects/docker-swagger-aggregator/internal/store/schema"
 
 // Package store is the SQLite persistence of the built-in authentication (users). It uses GORM with a
-// CGO-free SQLite driver (github.com/ncruces/go-sqlite3) and applies Atlas migrations at startup.
+// CGO-free SQLite driver (modernc.org/sqlite via github.com/glebarez/sqlite) and applies Atlas migrations at startup.
 //
 // The tables are described by the models in package schema; the SQL in migrations/ is generated from
 // them (see tools/migrate-gen and atlas.hcl).

@@ -357,7 +357,7 @@ keep `auth=none` and let Traefik (or nginx) ask Authelia through a `forwardAuth`
 ### Built-in users
 
 `auth=build_in`: the web server shows its own login form (PrimeVue + Tailwind, Vue) and keeps the users in a SQLite database
-(GORM, `github.com/ncruces/go-sqlite3`: **no CGO**) in `SWAGGER_AGGREGATOR_WEB_DATA_DIR` (`/data` in the image and in compose, `data` otherwise).
+(GORM with `modernc.org/sqlite`, SQLite transpiled to Go: **no CGO and no WebAssembly**) in `SWAGGER_AGGREGATOR_WEB_DATA_DIR` (`/data` in the image and in compose, `data` otherwise).
 The schema is created by Atlas migrations that are embedded in the binary and applied at startup.
 
 - **First start without users:** every page shows a *setup* form. It needs the **setup token** that is printed in the log at startup

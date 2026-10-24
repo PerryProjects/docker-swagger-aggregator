@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ncruces/go-sqlite3/gormlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -43,7 +43,7 @@ func dsn(path string) string {
 }
 
 func openDSN(ctx context.Context, dsn string) (*Store, error) {
-	db, err := gorm.Open(gormlite.Open(dsn), &gorm.Config{Logger: logger.Discard})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
