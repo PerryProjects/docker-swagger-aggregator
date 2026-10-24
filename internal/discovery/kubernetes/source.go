@@ -52,6 +52,9 @@ const (
 	crdRecheck           = time.Minute
 )
 
+// SourceName is the value of discovery.Container.Source for Kubernetes Services.
+const SourceName = "kubernetes"
+
 // Clients are the Kubernetes clients the source uses.
 type Clients struct {
 	Core kube.Interface
@@ -326,6 +329,7 @@ func (s *Source) container(svc *corev1.Service, ready bool) discovery.Container 
 	ctr := discovery.Container{
 		ID:      string(svc.UID),
 		Name:    svc.Name + "." + svc.Namespace,
+		Source:  SourceName,
 		Running: ready,
 	}
 	attrs := maps.Clone(svc.Labels)

@@ -20,6 +20,9 @@ import (
 	"github.com/perryprojects/docker-swagger-aggregator/internal/discovery"
 )
 
+// SourceName is the value of discovery.Container.Source for Docker containers.
+const SourceName = "docker"
+
 const (
 	composeServiceLabel = "com.docker.compose.service"
 	composeNumberLabel  = "com.docker.compose.container-number"
@@ -201,13 +204,14 @@ func (s *Source) toContainer(res client.ContainerInspectResult) (discovery.Conta
 		return discovery.Container{
 			ID:      i.ID,
 			Name:    s.displayName(i.Config.Labels, name),
+			Source:  SourceName,
 			Running: i.State.Running,
 			Problem: err.Error(),
 		}, true
 	}
 
 	c := discovery.Container{
-		ID: i.ID, Name: t.Name, Replica: replicaKey(i.Config.Labels), Running: i.State.Running, ServerURL: t.ServerURL,
+		ID: i.ID, Name: t.Name, Source: SourceName, Replica: replicaKey(i.Config.Labels), Running: i.State.Running, ServerURL: t.ServerURL,
 		Group: t.Group, Order: t.Order, KeepServerPath: t.KeepServerPath,
 	}
 	if i.State.Health != nil && i.State.Health.Status != "none" {

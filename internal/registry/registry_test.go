@@ -281,8 +281,11 @@ func TestReplicasAreOneServiceUpWhileAnyReplicaIsUp(t *testing.T) {
 	if s := get(t, r); s.Status != status.Up || s.SpecHash == "" {
 		t.Fatalf("service must stay up with its spec while another replica runs: %+v", s)
 	}
-	if signalled(ch) {
-		t.Fatal("a replica stopping must not change what the UI shows")
+	if got := get(t, r); got.Replicas != 2 || got.ReplicasUp != 1 {
+		t.Fatalf("replicas %d up %d, want 2 and 1", got.Replicas, got.ReplicasUp)
+	}
+	if !signalled(ch) {
+		t.Fatal("the number of running replicas is shown, so a replica stopping must notify")
 	}
 
 	r.UpsertReplica("api", "c2", "proj/api", false, "") // the last one stops
@@ -345,5 +348,49 @@ func TestRepresentativeReplicaDoesNotDependOnArrivalOrder(t *testing.T) {
 	spec, _, _ = r.Spec("api")
 	if string(spec) != `{"id":"c2"}` {
 		t.Fatalf("a replica that is up must take over, got %s", spec)
+	}
+}
+
+func TestSpecSummaryHealthAndSourceAreShown(t *testing.T) {
+	t.Parallel()
+
+	r := registry.New(registry.Config{})
+	r.Upsert("api", "c1", true, "healthy")
+	r.SetSource("c1", "docker")
+	r.SetSpec("c1", []byte(`{"openapi":"3.1.0","info":{"title":"Orders API","version":2},
+		"paths":{"/a":{"get":{},"post":{},"parameters":[]},"/b":{"delete":{}},"/c":{"$ref":"#/x"}}}`))
+	got := get(t, r)
+	if got.Title != "Orders API" || got.Version != "2" || got.OpenAPI != "3.1.0" || got.Endpoints != 3 {
+		t.Fatalf("spec summary: %+v", got)
+	}
+	if got.Health != "healthy" || got.Source != "docker" || got.Replicas != 1 || got.ReplicasUp != 1 {
+		t.Fatalf("health/source/replicas: %+v", got) // healthy + a fetched spec: the one workload is up
+	}
+
+	r.Upsert("sw", "c2", true, "none")
+	r.SetSpec("c2", []byte(`{"swagger":"2.0","info":{"title":"Old","version":"1.0"},"paths":{"/x":{"get":{}}}}`))
+	for _, s := range r.List() {
+		if s.Name == "sw" && (s.OpenAPI != "2.0" || s.Version != "1" && s.Version != "1.0" || s.Health != "" || s.Endpoints != 1) {
+			t.Fatalf("a Swagger 2.0 spec without a health check: %+v", s)
+		}
+	}
+}
+
+// A new spec changes what the status page shows, so it notifies; a probe that only moves lastSeen does not.
+func TestSpecSummaryChangeNotifies(t *testing.T) {
+	t.Parallel()
+
+	r := registry.New(registry.Config{})
+	r.Upsert("api", "c1", true, "")
+	r.SetSpec("c1", []byte(`{"openapi":"3.0.3","info":{"title":"A","version":"1"},"paths":{}}`))
+	ch, unsub := r.Subscribe()
+	defer unsub()
+	r.Touch("c1")
+	if signalled(ch) {
+		t.Fatal("Touch must not notify")
+	}
+	r.SetSpec("c1", []byte(`{"openapi":"3.0.3","info":{"title":"A","version":"2"},"paths":{"/p":{"get":{}}}}`))
+	if !signalled(ch) {
+		t.Fatal("a changed spec must notify")
 	}
 }

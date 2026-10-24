@@ -36,7 +36,7 @@ func (f fakeBackend) Spec(_ context.Context, name string) ([]byte, error) {
 func backend() fakeBackend {
 	return fakeBackend{
 		services: []mcptools.Service{
-			{Name: "orders", Status: "up", SpecHash: "a1", Group: "shop"},
+			{Name: "orders", Status: "up", SpecHash: "a1", Group: "shop", Title: "Orders API", Version: "2", Endpoints: 3},
 			{Name: "billing", Status: "down", SpecHash: "b1"},
 			{Name: "ghost", Status: "down", Error: "no network"},
 		},
@@ -120,6 +120,10 @@ func TestListServicesReportsSpecAndProblem(t *testing.T) {
 	svcs := out["services"].([]any) //nolint:forcetypeassert // test
 	if len(svcs) != 3 {
 		t.Fatalf("services: %v", svcs)
+	}
+	orders := svcs[0].(map[string]any) //nolint:forcetypeassert // test
+	if orders["title"] != "Orders API" || orders["version"] != "2" || orders["endpoints"] != float64(3) {
+		t.Fatalf("orders: %v", orders)
 	}
 	ghost := svcs[2].(map[string]any) //nolint:forcetypeassert // test
 	if ghost["name"] != "ghost" || ghost["hasSpec"] != false || ghost["problem"] != "no network" {

@@ -83,8 +83,12 @@ type serviceInfo struct {
 	Name    string `json:"name" jsonschema:"service name, the key for the other tools"`
 	Status  string `json:"status" jsonschema:"up or down"`
 	Group   string `json:"group,omitempty"`
-	HasSpec bool   `json:"hasSpec" jsonschema:"false: the service never delivered a spec, the other tools cannot read it"`
-	Problem string `json:"problem,omitempty" jsonschema:"last fetch or discovery problem"`
+	Title   string `json:"title,omitempty" jsonschema:"info.title of the spec"`
+	Version string `json:"version,omitempty" jsonschema:"info.version of the spec"`
+	// Endpoints is the number of operations in the spec: a hint of how big get_spec will be.
+	Endpoints int    `json:"endpoints,omitempty" jsonschema:"number of operations in the spec"`
+	HasSpec   bool   `json:"hasSpec" jsonschema:"false: the service never delivered a spec, the other tools cannot read it"`
+	Problem   string `json:"problem,omitempty" jsonschema:"last fetch or discovery problem"`
 }
 
 type listServicesOut struct {
@@ -98,7 +102,10 @@ func (h *handlers) listServices(ctx context.Context, _ *mcp.CallToolRequest, _ s
 	}
 	out := listServicesOut{Services: make([]serviceInfo, 0, len(svcs))}
 	for _, s := range svcs {
-		out.Services = append(out.Services, serviceInfo{Name: s.Name, Status: s.Status, Group: s.Group, HasSpec: s.SpecHash != "", Problem: s.Error})
+		out.Services = append(out.Services, serviceInfo{
+			Name: s.Name, Status: s.Status, Group: s.Group, Title: s.Title, Version: s.Version, Endpoints: s.Endpoints,
+			HasSpec: s.SpecHash != "", Problem: s.Error,
+		})
 	}
 	return nil, out, nil
 }

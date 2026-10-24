@@ -16,12 +16,16 @@ const maxSpecBytes = 32 << 20
 
 // Service is what the API reports about a service (GET /api/services).
 type Service struct {
-	Name     string     `json:"name"`
-	Status   string     `json:"status"`
-	LastSeen *time.Time `json:"lastSeen,omitempty"`
-	SpecHash string     `json:"specHash,omitempty"`
-	Error    string     `json:"error,omitempty"`
-	Group    string     `json:"group,omitempty"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"`
+	LastSeen  *time.Time `json:"lastSeen,omitempty"`
+	SpecHash  string     `json:"specHash,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	Group     string     `json:"group,omitempty"`
+	Title     string     `json:"title,omitempty"`
+	Version   string     `json:"version,omitempty"`
+	OpenAPI   string     `json:"openapi,omitempty"`
+	Endpoints int        `json:"endpoints,omitempty"`
 }
 
 // ErrNoSpec means the service exists but has not delivered a spec yet.

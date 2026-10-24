@@ -16,6 +16,7 @@ type Store interface {
 	UpsertReplica(name, id, replicaKey string, running bool, health string)
 	SetRoute(id string, up registry.Upstream)
 	SetMeta(id, group string, order int)
+	SetSource(id, source string)
 	SetProblem(id, msg string)
 	SetSpec(id string, spec []byte)
 	Touch(id string)
@@ -74,6 +75,7 @@ func (m *Manager) Apply(ctx context.Context, c Container) {
 		registry.Upstream{Base: c.BaseURL, PublicURL: c.ServerURL, KeepPublicPath: c.KeepServerPath},
 	)
 	m.cfg.Store.SetMeta(c.ID, c.Group, c.Order)
+	m.cfg.Store.SetSource(c.ID, c.Source)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

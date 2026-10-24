@@ -4,8 +4,10 @@ package registry
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,17 @@ type Service struct {
 	Error    string        `json:"error,omitempty"` // last fetch/discovery problem
 	Group    string        `json:"group,omitempty"` // optional UI grouping label
 	Order    int           `json:"order,omitempty"` // optional sort key inside a group
+
+	// What the current spec says about the service (set together with SpecHash).
+	Title     string `json:"title,omitempty"`     // info.title
+	Version   string `json:"version,omitempty"`   // info.version
+	OpenAPI   string `json:"openapi,omitempty"`   // "3.1.0", "2.0", ...
+	Endpoints int    `json:"endpoints,omitempty"` // number of operations
+	// Where and how it runs.
+	Source     string `json:"source,omitempty"`     // "docker" or "kubernetes"
+	Health     string `json:"health,omitempty"`     // Docker health status (healthy, unhealthy, starting); empty without a health check
+	Replicas   int    `json:"replicas,omitempty"`   // workloads behind this service (more than one when scaled)
+	ReplicasUp int    `json:"replicasUp,omitempty"` // how many of them are up
 }
 
 // Upstream says where a workload can be reached and how its public URL maps onto it.
@@ -111,6 +124,10 @@ func (r *Registry) UpsertReplica(name, id, replicaKey string, running bool, heal
 	r.mutate(e, func() {
 		e.in.Running = running
 		e.in.Health = health
+		e.svc.Health = health
+		if health == "none" {
+			e.svc.Health = ""
+		}
 		if !running {
 			e.in.ProbeOK = false
 		}
@@ -153,6 +170,11 @@ func (r *Registry) SetRoute(id string, up Upstream) {
 	if u, err := url.Parse(up.PublicURL); err == nil && u.Host != "" {
 		e.publicURL = u
 	}
+}
+
+// SetSource records which source found the workload ("docker", "kubernetes").
+func (r *Registry) SetSource(id, source string) {
+	r.update(id, func(e *entry) { e.svc.Source = source })
 }
 
 // SetMeta records the optional group/order metadata.
@@ -214,6 +236,7 @@ func (r *Registry) SetSpec(id string, spec []byte) {
 	r.update(id, func(e *entry) {
 		now := r.now()
 		e.spec, e.svc.SpecHash, e.svc.LastSeen = spec, hex.EncodeToString(sum[:8]), &now
+		e.svc.Title, e.svc.Version, e.svc.OpenAPI, e.svc.Endpoints = specSummary(spec)
 		e.svc.Error = ""
 		e.in.ProbeOK = true
 	})
@@ -343,7 +366,14 @@ func (r *Registry) view(name string) (Service, bool) {
 	if len(group) == 0 {
 		return Service{}, false
 	}
-	return r.representative(group).svc, true
+	svc := r.representative(group).svc
+	svc.Replicas = len(group)
+	for _, e := range group {
+		if e.svc.Status == status.Up {
+			svc.ReplicasUp++
+		}
+	}
+	return svc, true
 }
 
 // Version increases whenever the visible service list changes. Callers can use
@@ -401,7 +431,9 @@ func (r *Registry) mutate(e *entry, f func()) {
 	after, _ := r.view(e.svc.Name)
 	if !hadBefore || before.Name != after.Name || before.Status != after.Status ||
 		before.SpecHash != after.SpecHash || before.Error != after.Error ||
-		before.Group != after.Group || before.Order != after.Order {
+		before.Group != after.Group || before.Order != after.Order ||
+		before.Health != after.Health || before.Source != after.Source ||
+		before.Replicas != after.Replicas || before.ReplicasUp != after.ReplicasUp {
 		r.notify()
 	}
 }
@@ -421,4 +453,50 @@ func shortID(id string) string {
 		return id[:shortIDLen]
 	}
 	return id
+}
+
+var operationMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+
+// specSummary reads what the status page shows of a (canonical JSON) spec: title, version, the OpenAPI/Swagger
+// version and the number of operations. It never fails: a spec that Prepare accepted can still have odd values.
+func specSummary(spec []byte) (title, version, openapi string, endpoints int) {
+	var doc struct {
+		OpenAPI string `json:"openapi"`
+		Swagger string `json:"swagger"`
+		Info    struct {
+			Title   any `json:"title"`
+			Version any `json:"version"`
+		} `json:"info"`
+		Paths map[string]json.RawMessage `json:"paths"`
+	}
+	if json.Unmarshal(spec, &doc) != nil {
+		return "", "", "", 0
+	}
+	openapi = doc.OpenAPI
+	if openapi == "" {
+		openapi = doc.Swagger
+	}
+	for _, item := range doc.Paths {
+		var ops map[string]json.RawMessage
+		if json.Unmarshal(item, &ops) != nil {
+			continue
+		}
+		for _, m := range operationMethods {
+			if _, ok := ops[m]; ok {
+				endpoints++
+			}
+		}
+	}
+	return text(doc.Info.Title), text(doc.Info.Version), openapi, endpoints
+}
+
+// text turns a JSON string or number (a version written as 1.0 or 2) into a string.
+func text(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	}
+	return ""
 }
