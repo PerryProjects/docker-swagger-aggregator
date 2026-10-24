@@ -48,6 +48,15 @@ services:
     environment:
       SWAGGER_AGGREGATOR_WEB_DIR: /web/dist
       SWAGGER_AGGREGATOR_WEB_API: http://api:8080
+      # Login for the UI and /api: none (default) | build_in (own users, see README "Authentication") | oidc.
+      # With build_in, register the first admin on the setup page (the token is in `docker compose logs web`)
+      # or set SWAGGER_AGGREGATOR_WEB_ADMIN_USER / SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD in your environment.
+      SWAGGER_AGGREGATOR_WEB_AUTH: ${SWAGGER_AGGREGATOR_WEB_AUTH:-none}
+      SWAGGER_AGGREGATOR_WEB_DATA_DIR: /data
+      SWAGGER_AGGREGATOR_WEB_ADMIN_USER: ${SWAGGER_AGGREGATOR_WEB_ADMIN_USER:-}
+      SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD: ${SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD:-}
+    volumes:
+      - web-data:/data # users of auth=build_in; the root file system stays read-only
     depends_on:
       api:
         condition: service_healthy
@@ -96,6 +105,9 @@ services:
       swagger-aggregator.name: Inventory
       swagger-aggregator.server-url: http://localhost:9000/inventory
     networks: [services]
+
+volumes:
+  web-data:
 
 networks:
   docker-api:

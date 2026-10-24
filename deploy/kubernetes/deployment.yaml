@@ -43,6 +43,11 @@ spec:
           env:
             - {name: SWAGGER_AGGREGATOR_WEB_DIR, value: /web/dist}
             - {name: SWAGGER_AGGREGATOR_WEB_API, value: "http://127.0.0.1:8080"}
+            # Built-in users (see README, "Authentication"): SWAGGER_AGGREGATOR_WEB_AUTH=build_in plus
+            # SWAGGER_AGGREGATOR_WEB_DATA_DIR=/data. The users live in /data: replace the emptyDir below by a
+            # PersistentVolumeClaim, or they are gone when the pod is re-created (and the setup page opens again).
+            # - {name: SWAGGER_AGGREGATOR_WEB_AUTH, value: build_in}
+            # - {name: SWAGGER_AGGREGATOR_WEB_DATA_DIR, value: /data}
             # Optional login (see README, "Authentication"); put the secrets into a Secret, not into this file:
             # - {name: SWAGGER_AGGREGATOR_WEB_AUTH, value: oidc}
             # - {name: SWAGGER_AGGREGATOR_WEB_OIDC_ISSUER, value: "https://auth.example.com"}
@@ -60,6 +65,10 @@ spec:
             requests: {cpu: 10m, memory: 16Mi}
             limits: {memory: 128Mi}
           securityContext: *hardened
+          volumeMounts: [{name: data, mountPath: /data}] # only used with auth=build_in
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 64Mi} # use a PersistentVolumeClaim to keep the users
 ---
 apiVersion: v1
 kind: Service
