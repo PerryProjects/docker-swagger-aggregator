@@ -5,7 +5,9 @@ kind: Deployment
 metadata:
   name: swagger-aggregator
 spec:
-  replicas: 1 # state is in memory; every replica rebuilds it from the cluster
+  # State is in memory and derived from the cluster, so more replicas need no coordination (each one probes every spec
+  # itself; see README, "Scaling"). Keep 1 with auth=build_in: its users are one SQLite file.
+  replicas: 1
   selector:
     matchLabels: {app.kubernetes.io/name: swagger-aggregator}
   template:

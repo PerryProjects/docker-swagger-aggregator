@@ -51,6 +51,9 @@ The compose file starts a `tecnativa/docker-socket-proxy`, the API, the web serv
 path/name/server-url labels). Try `docker compose stop orders` and watch the marker turn red.
 Locally the UI port comes from `docker-compose.override.yml` (loaded automatically). With Traefik see [Traefik](#traefik).
 
+More combinations (own login, OIDC, MCP, two API instances, Traefik, a remote Kubernetes cluster) are ready-made in
+[`examples/`](examples/README.md).
+
 ## Labels
 
 | Label | Default | Meaning |
@@ -136,7 +139,7 @@ known spec.
 
 `/status` lists **every** discovered service (also those that never delivered a spec, which are not in the docs):
 up/down as text and marker, last successful fetch, the current problem (fetch error, wrong network, invalid labels, ...) and
-an "Open docs" link. It updates live over the same SSE stream. The docs sidebar links to it. It is a PrimeVue page (light/dark follows the OS).
+an "Open docs" link. It updates live over the same SSE stream. The docs sidebar links to it. It is a PrimeVue page (light/dark follows the OS). Every page has the same navigation: documentation, API reference, status and, for admins, users.
 
 ## HTTP API
 
@@ -148,9 +151,35 @@ an "Open docs" link. It updates live over the same SSE stream. The docs sidebar 
 | `ANY /api/proxy/{containerID}/{path...}` | same-origin reverse proxy to that container (used by "Try it", see below) |
 | `ANY /api/scalar-proxy?scalar_url=…` | Scalar's `proxyUrl` endpoint: forwards a public URL below a registered service's `server-url` to that container |
 | `GET /healthz` | `ok` |
+| `GET /spec/{openapi,asyncapi}.{json,yaml}` | this interface as OpenAPI 3.1 and AsyncAPI 3.1, see [Build your own frontend](#build-your-own-frontend); `/auth/*` is the built-in login |
 
 `lastSeen` is the last successful fetch. Changes that only move `lastSeen` do not emit an SSE event.
 YAML specs are accepted and served as JSON.
+
+## Build your own frontend
+
+The UI that ships with this program is only one client of an HTTP interface that is documented in the program itself:
+the **API** page (`/api-docs`) shows it with Scalar, as two documents: the REST endpoints as **OpenAPI 3.1** and the live
+event stream as **AsyncAPI 3.1**. Both are also served as plain files for code generators and your own tooling:
+`/spec/openapi.json`, `/spec/openapi.yaml`, `/spec/asyncapi.json`, `/spec/asyncapi.yaml` (public, like `/healthz`). The sources are
+[`internal/apidocs/openapi.yaml`](internal/apidocs/openapi.yaml) and [`asyncapi.yaml`](internal/apidocs/asyncapi.yaml); tests check them against the code
+(the schemas against the structs and real responses, every documented operation against the real handlers).
+
+```js
+const services = await (await fetch('/api/services')).json()                    // [{name, status, specHash, ...}]
+const spec = await (await fetch(`/api/services/${encodeURIComponent(services[0].name)}/spec`)).json()
+const es = new EventSource('/api/events')                                       // live: a full snapshot on every change
+es.addEventListener('services', (e) => render(JSON.parse(e.data)))
+```
+
+With `auth=build_in`, `POST /auth/login` (JSON) sets the session cookie, `GET /auth/session` tells which login to show;
+`auth=oidc` redirects the browser to the provider.
+
+**Same origin is required.** This server does not send CORS headers, and the session is a `SameSite=Lax` cookie, so a frontend on
+another origin cannot use it. Host your frontend on the same origin: point `--dir` of `swagger-aggregator-web` at your build (it needs an
+`index.html`; unknown paths fall back to it, so a single-page app works), or route your frontend and this server's paths (`/api`, `/auth`,
+`/spec`) to one host in your reverse proxy. For tools and assistants that cannot do a browser login there is the token-protected
+[MCP server](#mcp-ai-assistants).
 
 ## "Try it" (CORS)
 
@@ -250,6 +279,33 @@ go run ./cmd/swagger-aggregator --docker=false --kubernetes --derive-server-url 
 
 Limits of the API server proxy: it needs `get` on `services/proxy`, it speaks HTTP to the Service only, and it consumes the `Authorization` header, so
 Try-it calls that need their own `Authorization` header do not work in this mode (use the in-cluster deployment for those).
+
+## Scaling
+
+**The API instances need no coordination.** Everything an API instance holds is *derived* from Docker or Kubernetes (read-only
+discovery) plus a fetch of each spec: nothing is authoritative, so a second instance simply builds the same picture on its own.
+Run two or more for availability (`examples/scaled.yml`, `replicas:` in the Kubernetes deployment).
+
+- **Server-Sent Events need no routing.** An event stream is served by the instance that accepted the connection, from that instance's
+  own state, which is the same as everybody else's (only `lastSeen` timestamps differ by milliseconds). A reconnect to another instance is
+  harmless: every message is a full snapshot. There is no "right pod" to send events to, so no sticky sessions are needed.
+- **What it costs:** every instance runs its own watchers and fetches every spec itself, so probe traffic grows with the number of instances
+  (`--probe-interval` is the knob). In Kubernetes each instance also runs its own informers.
+- **Instances must agree.** They do: the spec hash does not depend on the instance (found and fixed while testing two API containers against
+  three compose replicas: they had picked different replicas to document the service).
+- **Docker discovery is per host.** One API instance sees the containers of one Docker daemon; there is no multi-host or Swarm support.
+- **The web server:** stateless with `auth=none` or `oidc` (give every replica the **same** `SESSION_SECRET`; the login throttle is per
+  replica) and with MCP (stateless). With `auth=build_in` it is a **single instance**: the users are one SQLite file.
+
+**Leader election and Redis: possible, deliberately not built.** A Kubernetes `Lease` (client-go leader election) could let only the
+leader fetch specs, but then the others need the results, which means a shared store plus pub/sub so that each instance can still feed its
+own event streams, and a gap or stale data whenever the leader changes. That trades a few small HTTP requests per probe interval for a new
+dependency and new failure modes; it pays only with hundreds of services *and* many instances. `redsync` is a Redis *lock* library: it
+serialises work, it does not share state, so it would not solve this problem. If the probe load ever matters, first raise
+`--probe-interval` or run two instances instead of ten.
+
+Tested: two API containers against one Docker daemon (consistent lists and spec hashes, event stream through the web server). Not tested:
+several pods in Kubernetes, several web replicas.
 
 ## Development
 
