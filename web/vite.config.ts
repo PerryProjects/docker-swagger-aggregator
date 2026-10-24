@@ -13,15 +13,16 @@ const backend = process.env.SWAGGER_AGGREGATOR_BACKEND ?? 'http://localhost:8080
 // Keys starting with ^ are regular expressions: a plain '/api' would be a prefix match and also swallow the page /api-docs.
 const proxy = { '^/api/': backend, '^/auth/': backend, '^/mcp$': backend }
 
-// /spec/openapi.{json,yaml}: this program's own API document, read from the file the Go server embeds, so the
-// API page works without the Go server and always shows the current file.
-const SPEC = fileURLToPath(new URL('../internal/apidocs/openapi.yaml', import.meta.url))
+// /spec/{openapi,asyncapi}.{json,yaml}: this program's own API documents, read from the files the Go server embeds,
+// so the API page works without the Go server and always shows the current files.
+const SPEC_DIR = fileURLToPath(new URL('../internal/apidocs/', import.meta.url))
 
 function ownApiSpec(): Plugin {
   const serve = (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const path = (req.url ?? '').split('?')[0]
-    if (path !== '/spec/openapi.json' && path !== '/spec/openapi.yaml') return next()
-    const yaml = readFileSync(SPEC, 'utf8')
+    const match = /^\/spec\/(openapi|asyncapi)\.(json|yaml)$/.exec(path)
+    if (!match) return next()
+    const yaml = readFileSync(`${SPEC_DIR}${match[1]}.yaml`, 'utf8')
     res.setHeader('Cache-Control', 'no-cache')
     if (path.endsWith('.json')) {
       res.setHeader('Content-Type', 'application/json')
@@ -32,7 +33,7 @@ function ownApiSpec(): Plugin {
     }
   }
   return {
-    name: 'own-api-spec',
+    name: 'own-api-specs',
     configureServer: (s) => void s.middlewares.use(serve),
     configurePreviewServer: (s) => void s.middlewares.use(serve), // production build, used by the e2e tests
   }

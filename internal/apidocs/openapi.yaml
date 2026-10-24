@@ -1,4 +1,4 @@
-openapi: 3.1.0
+openapi: 3.2.0
 info:
   title: Swagger Aggregator HTTP API
   version: 1.0.0
@@ -8,7 +8,9 @@ info:
     Use this interface to build your own frontend: list the documented services, read their OpenAPI specs, follow
     status changes live and (optionally) manage users.
 
-    **Live updates** are a Server-Sent Events stream: see `GET /api/events`, which documents every event.
+    **Live updates** are Server-Sent Events: `GET /api/events` (the service list) and, for admins, `GET /auth/users/events`
+    (the user list). Both are also described in the **AsyncAPI** document (`/spec/asyncapi.json`, the second document of the
+    API page).
 
     **Authentication** depends on `SWAGGER_AGGREGATOR_WEB_AUTH`:
     - `none`: no authentication.
@@ -54,7 +56,7 @@ tags:
   - name: Users
     description: User management (auth=build_in, admins only).
   - name: Meta
-    description: Health and the document describing this API.
+    description: Health and the documents describing this API.
 paths:
   /api/services:
     get:
@@ -119,10 +121,10 @@ paths:
 
         ## Events
 
-        | Event | `data` | When |
-        |---|---|---|
-        | `services` | a JSON array of [`Service`](#model/service): the complete list | once right after connecting, then after **every visible change**: a service appears or disappears, goes up or down, gets a new spec, changes its problem, group or order |
-        | *(none)* | the comment line `: heartbeat` | every 15 seconds, so idle proxies keep the connection open |
+        - **`services`**: `data` is a JSON array of [`Service`](#model/service), the complete list. Sent once right after
+          connecting, then after **every visible change**: a service appears or disappears, goes up or down, gets a new
+          spec, changes its problem, group or order, or the number of its running replicas changes.
+        - **No event name**: the comment line `: heartbeat`, every 15 seconds, so that idle proxies keep the connection open.
 
         A comment line is not an event: `EventSource` ignores it, so the application never sees a heartbeat. A change that
         only moves `lastSeen` is not a visible change and sends nothing.
@@ -166,8 +168,9 @@ paths:
               schema:
                 type: string
                 description: |
-                  Blocks of `event: services` + `data: <JSON array of Service>`, separated by an empty line, and
-                  `: heartbeat` comment lines.
+                  The raw stream: blocks of `event: services` + `data: <JSON array of Service>`, separated by an empty
+                  line, and `: heartbeat` comment lines.
+              itemSchema: {$ref: "#/components/schemas/ServicesEvent"}
               examples:
                 afterConnecting:
                   summary: The first message after connecting
@@ -421,6 +424,22 @@ paths:
       security: []
       responses:
         "200": {description: This OpenAPI document., content: {application/yaml: {schema: {type: string}}}}
+  /spec/asyncapi.json:
+    get:
+      tags: [Meta]
+      operationId: getAsyncAPI
+      summary: The AsyncAPI document of the event streams (JSON)
+      security: []
+      responses:
+        "200": {description: The AsyncAPI 3.1 document., content: {application/json: {schema: {type: object}}}}
+  /spec/asyncapi.yaml:
+    get:
+      tags: [Meta]
+      operationId: getAsyncAPIYAML
+      summary: The AsyncAPI document of the event streams (YAML)
+      security: []
+      responses:
+        "200": {description: The AsyncAPI 3.1 document., content: {application/yaml: {schema: {type: string}}}}
   /auth/session:
     get:
       tags: [Auth]
@@ -563,6 +582,46 @@ paths:
         "403": {$ref: "#/components/responses/AdminOnly"}
         "409": {description: The username is taken., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
         "415": {$ref: "#/components/responses/NotJSON"}
+  /auth/users/events:
+    get:
+      tags: [Users]
+      operationId: streamUserEvents
+      summary: Follow the user list live (Server-Sent Events, admins only)
+      description: |
+        Works exactly like `GET /api/events`, for the user list: the whole list on connect and after every change (a user
+        is created, changed or deleted, by anyone), as event `users`, plus a `: heartbeat` comment every 15 seconds.
+
+        ```js
+        const es = new EventSource('/auth/users/events')
+        es.addEventListener('users', (e) => render(JSON.parse(e.data)))
+        ```
+
+        `401` without a session and `403` for a user who is not an admin, which makes `EventSource` stop: fall back to
+        polling `GET /auth/users`. The stream ends when its admin is signed out, demoted, disabled or deleted.
+      security: [{cookieAuth: []}]
+      responses:
+        "200":
+          description: The event stream. It stays open until either side closes it.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-cache}}
+            X-Accel-Buffering: {schema: {type: string, const: "no"}}
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  The raw stream: blocks of `event: users` + `data: <JSON array of User>`, separated by an empty line,
+                  and `: heartbeat` comment lines.
+              itemSchema: {$ref: "#/components/schemas/UsersEvent"}
+              examples:
+                afterConnecting:
+                  summary: The first message after connecting
+                  value: |+
+                    event: users
+                    data: [{"id":1,"username":"admin","role":"admin","disabled":false},{"id":2,"username":"dave","role":"user","disabled":false}]
+
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/AdminOnly"}
   /auth/users/{id}:
     parameters:
       - name: id
@@ -667,6 +726,46 @@ components:
         error: {type: string, description: The last fetch or discovery problem.}
         group: {type: string, description: Optional group label.}
         order: {type: integer, description: Optional sort key inside a group.}
+        title: {type: string, description: "`info.title` of the spec."}
+        version: {type: string, description: "`info.version` of the spec."}
+        openapi: {type: string, description: "The OpenAPI or Swagger version of the spec, e.g. `3.1.0` or `2.0`."}
+        endpoints: {type: integer, description: Number of operations in the spec.}
+        source: {type: string, enum: [docker, kubernetes], description: What found the service.}
+        health: {type: string, description: "Docker health status (`healthy`, `unhealthy`, `starting`); absent without a health check."}
+        replicas: {type: integer, description: Workloads behind the service (more than one when scaled).}
+        replicasUp: {type: integer, description: How many of them are up.}
+    ServiceList:
+      type: array
+      items: {$ref: "#/components/schemas/Service"}
+    UserList:
+      type: array
+      items: {$ref: "#/components/schemas/User"}
+    ServicesEvent:
+      type: object
+      description: |
+        One event of the service stream, as the `itemSchema` of `text/event-stream` defines it: the SSE fields `event`
+        and `data`, where `data` is the JSON text of the whole service list.
+      required: [event, data]
+      properties:
+        event: {type: string, const: services}
+        data:
+          type: string
+          contentMediaType: application/json
+          contentSchema: {$ref: "#/components/schemas/ServiceList"}
+        id: {type: string, description: Not used by this server.}
+        retry: {type: integer, minimum: 0, description: Not used by this server.}
+    UsersEvent:
+      type: object
+      description: "One event of the user stream: the SSE fields `event` and `data`, where `data` is the JSON text of the whole user list."
+      required: [event, data]
+      properties:
+        event: {type: string, const: users}
+        data:
+          type: string
+          contentMediaType: application/json
+          contentSchema: {$ref: "#/components/schemas/UserList"}
+        id: {type: string, description: Not used by this server.}
+        retry: {type: integer, minimum: 0, description: Not used by this server.}
     SessionInfo:
       type: object
       required: [mode, setupRequired]

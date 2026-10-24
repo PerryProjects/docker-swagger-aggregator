@@ -48,6 +48,8 @@ type LocalConfig struct {
 	// SameSite of the session cookie: Lax (the default, also for the zero value) or None for a frontend on another
 	// *site* (None implies Secure, so it needs HTTPS or localhost).
 	SameSite http.SameSite
+	// Heartbeat is the keep-alive interval of the user event stream (default 15s).
+	Heartbeat time.Duration
 	// ThrottleBase is the delay after the first failed attempt (default 1s); it doubles up to 30s.
 	ThrottleBase time.Duration
 }
@@ -61,6 +63,39 @@ type Local struct {
 
 	mu       sync.Mutex
 	failures map[string]failure
+	users    hub // told whenever the user list changes, for the event stream
+}
+
+// hub tells subscribers that something changed (coalesced: a pending signal is not queued twice).
+type hub struct {
+	mu   sync.Mutex
+	subs map[chan struct{}]struct{}
+}
+
+func (h *hub) subscribe() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	h.mu.Lock()
+	if h.subs == nil {
+		h.subs = map[chan struct{}]struct{}{}
+	}
+	h.subs[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch, func() {
+		h.mu.Lock()
+		delete(h.subs, ch)
+		h.mu.Unlock()
+	}
+}
+
+func (h *hub) notify() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 type failure struct {
@@ -95,6 +130,9 @@ func NewLocal(cfg LocalConfig, log *zap.Logger) (*Local, error) {
 	}
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = defaultTTL
+	}
+	if cfg.Heartbeat <= 0 {
+		cfg.Heartbeat = 15 * time.Second
 	}
 	if cfg.ThrottleBase <= 0 {
 		cfg.ThrottleBase = time.Second
@@ -177,6 +215,7 @@ func (l *Local) Wrap(next http.Handler) http.Handler {
 	mux.HandleFunc("POST /auth/setup", l.setup)
 	mux.HandleFunc("POST /auth/password", l.requireUser(l.changeOwnPassword))
 	mux.HandleFunc("GET /auth/users", l.requireAdmin(l.listUsers))
+	mux.HandleFunc("GET /auth/users/events", l.requireAdmin(l.usersEvents))
 	mux.HandleFunc("POST /auth/users", l.requireAdmin(l.createUser))
 	mux.HandleFunc("PATCH /auth/users/{id}", l.requireAdmin(l.updateUser))
 	mux.HandleFunc("DELETE /auth/users/{id}", l.requireAdmin(l.deleteUser))
@@ -334,6 +373,7 @@ func (l *Local) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l.succeeded(setupKey)
+	l.users.notify()
 	l.log.Info("first admin registered", zap.String("user", u.Username))
 	if l.startSession(w, r, u) {
 		writeJSON(w, http.StatusCreated, map[string]any{"user": toPublic(u)})
@@ -405,6 +445,61 @@ func (l *Local) listUsers(w http.ResponseWriter, r *http.Request, _ store.User) 
 	writeJSON(w, http.StatusOK, out)
 }
 
+// usersEvents streams the user list as Server-Sent Events: the whole list on connect and after every change, so the
+// user management page stays current when another admin (or another tab) changes something. It ends as soon as the
+// session behind it is no longer an admin's (signed out, demoted, disabled or deleted).
+func (l *Local) usersEvents(w http.ResponseWriter, r *http.Request, _ store.User) {
+	rc := http.NewResponseController(w)
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no") // nginx; Traefik does not buffer SSE
+	changed, unsubscribe := l.users.subscribe()
+	defer unsubscribe() // subscribe before the first snapshot: no change falls in between
+
+	send := func() bool {
+		if u, ok := l.current(r); !ok || u.Role != store.RoleAdmin {
+			return false
+		}
+		us, err := l.cfg.Store.ListUsers(r.Context())
+		if err != nil {
+			return false
+		}
+		out := make([]publicUser, len(us))
+		for i, u := range us {
+			out[i] = toPublic(u)
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Fprintf(w, "event: users\ndata: %s\n\n", b)
+		return err == nil && rc.Flush() == nil
+	}
+	if !send() {
+		return
+	}
+	tick := time.NewTicker(l.cfg.Heartbeat)
+	defer tick.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-changed:
+			if !send() {
+				return
+			}
+		case <-tick.C:
+			if u, ok := l.current(r); !ok || u.Role != store.RoleAdmin {
+				return
+			}
+			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil || rc.Flush() != nil {
+				return
+			}
+		}
+	}
+}
+
 type newUser struct {
 	credentials
 	Role string `json:"role"`
@@ -435,6 +530,7 @@ func (l *Local) createUser(w http.ResponseWriter, r *http.Request, _ store.User)
 		l.fail(w, err)
 		return
 	}
+	l.users.notify()
 	writeJSON(w, http.StatusCreated, toPublic(u))
 }
 
@@ -478,6 +574,7 @@ func (l *Local) updateUser(w http.ResponseWriter, r *http.Request, actor store.U
 	if !l.storeError(w, err) {
 		return
 	}
+	l.users.notify()
 	u, err := l.cfg.Store.UserByID(ctx, id)
 	if !l.storeError(w, err) {
 		return
@@ -503,6 +600,7 @@ func (l *Local) deleteUser(w http.ResponseWriter, r *http.Request, actor store.U
 	if !l.storeError(w, l.cfg.Store.DeleteUser(r.Context(), id)) {
 		return
 	}
+	l.users.notify()
 	w.WriteHeader(http.StatusNoContent)
 }
 

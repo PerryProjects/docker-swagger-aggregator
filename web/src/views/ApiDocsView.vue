@@ -3,8 +3,9 @@ import { computed, defineAsyncComponent } from 'vue'
 import NavBar from '../components/NavBar.vue'
 import { BASE } from '../base'
 
-// The documentation of this program's own interface (what a custom frontend talks to): the REST endpoints, the
-// live event stream (SSE) and the MCP endpoint, as one OpenAPI document rendered by Scalar.
+// The documentation of this program's own interface (what a custom frontend talks to), rendered by Scalar as two
+// documents: the REST endpoints, the event streams (SSE) and the MCP endpoint as OpenAPI, and the event streams as
+// AsyncAPI (Scalar renders AsyncAPI 3.x natively; its SDK generator for it is experimental).
 const ApiReference = defineAsyncComponent(async () => {
   const [{ ApiReference }] = await Promise.all([
     import('@scalar/api-reference'),
@@ -18,7 +19,10 @@ const configuration = computed(() => ({
   telemetry: false,
   agent: { disabled: true },
   hideClientButton: true,
-  url: `${BASE}spec/openapi.json`,
+  sources: [
+    { title: 'REST API (OpenAPI)', slug: 'rest', url: `${BASE}spec/openapi.json` },
+    { title: 'Events (AsyncAPI)', slug: 'events', url: `${BASE}spec/asyncapi.json` },
+  ],
 }))
 </script>
 

@@ -1,0 +1,162 @@
+asyncapi: 3.1.0
+info:
+  title: Swagger Aggregator events
+  version: 1.0.0
+  description: |
+    Two live streams as **Server-Sent Events** over plain HTTP: the service list (`GET /api/events`) and, for admins,
+    the user list (`GET /auth/users/events`, only with the built-in login). Both work the same way:
+
+    - On connect the server sends the **complete** list once, then again after **every visible change**. For services:
+      one appears or disappears, goes up or down, gets a new spec, changes its problem, group or order, or the number of
+      its running replicas changes. For users: one is created, changed or deleted. Every message is a full snapshot, so
+      a client simply replaces its list; there are no deltas to apply and nothing to resume after a reconnect.
+    - A comment line `: heartbeat` every 15 seconds keeps idle reverse proxies from closing the connection. Comments carry
+      no event; `EventSource` ignores them.
+    - Use the browser's `EventSource`: it reconnects by itself. If authentication is on, a stream answers `401` (or `403`
+      for the user stream and a non-admin), which makes `EventSource` stop; fall back to polling `GET /api/services` or
+      `GET /auth/users` (see the OpenAPI document) and sign in again. The user stream also ends when its admin is signed out,
+      demoted, disabled or deleted.
+    - Scalar and other tools without SSE support show this as an HTTP channel; the wire format is the standard
+      [SSE format](https://html.spec.whatwg.org/multipage/server-sent-events.html): `event: services`, then
+      `data: <one line of JSON>`, then an empty line.
+
+    ```js
+    const es = new EventSource('/api/events')
+    es.addEventListener('services', (e) => render(JSON.parse(e.data)))
+    // admins: new EventSource('/auth/users/events') with the event name `users`
+    ```
+defaultContentType: application/json
+servers:
+  web:
+    host: localhost:3000
+    protocol: http
+    description: The origin that serves the UI (a reverse-proxy host and base path replace this).
+channels:
+  services:
+    address: /api/events
+    title: Service list
+    description: |
+      One long-lived `GET`. The response has `Content-Type: text/event-stream` and `Cache-Control: no-cache`;
+      `X-Accel-Buffering: no` tells nginx not to buffer it.
+    messages:
+      servicesSnapshot:
+        $ref: "#/components/messages/servicesSnapshot"
+      heartbeat:
+        $ref: "#/components/messages/heartbeat"
+    bindings:
+      http:
+        method: GET
+  users:
+    address: /auth/users/events
+    title: User list
+    description: |
+      Admins only (auth=build_in). Same format as the service stream; the event is called `users`. Answers `401` without
+      a session and `403` for a user who is not an admin.
+    messages:
+      usersSnapshot:
+        $ref: "#/components/messages/usersSnapshot"
+      heartbeat:
+        $ref: "#/components/messages/heartbeat"
+    bindings:
+      http:
+        method: GET
+operations:
+  receiveUsers:
+    action: receive
+    channel: {$ref: "#/channels/users"}
+    title: Receive the user list
+    summary: Replace the local user list with every `users` event.
+    messages:
+      - $ref: "#/channels/users/messages/usersSnapshot"
+      - $ref: "#/channels/users/messages/heartbeat"
+  receiveServices:
+    action: receive
+    channel: {$ref: "#/channels/services"}
+    title: Receive the service list
+    summary: Replace the local list with every `services` event.
+    messages:
+      - $ref: "#/channels/services/messages/servicesSnapshot"
+      - $ref: "#/channels/services/messages/heartbeat"
+components:
+  messages:
+    servicesSnapshot:
+      name: services
+      title: Service list snapshot
+      summary: The complete list of discovered services.
+      description: |
+        SSE event `services`. Wire format:
+
+        ```
+        event: services
+        data: [{"name":"orders","status":"up","specHash":"54efce3d897a6fb5"}]
+
+        ```
+      contentType: application/json
+      payload: {$ref: "#/components/schemas/ServiceList"}
+      examples:
+        - name: two services
+          payload:
+            - {name: orders, status: up, lastSeen: "2026-10-24T17:40:04.489Z", specHash: 54efce3d897a6fb5}
+            - {name: ghost, status: down, error: container is not attached to the network}
+    usersSnapshot:
+      name: users
+      title: User list snapshot
+      summary: The complete list of users.
+      description: |
+        SSE event `users`. Wire format:
+
+        ```
+        event: users
+        data: [{"id":1,"username":"admin","role":"admin","disabled":false}]
+
+        ```
+      contentType: application/json
+      payload: {$ref: "#/components/schemas/UserList"}
+      examples:
+        - name: two users
+          payload:
+            - {id: 1, username: admin, role: admin, disabled: false}
+            - {id: 2, username: dave, role: user, disabled: true}
+    heartbeat:
+      name: heartbeat
+      title: Heartbeat
+      summary: A comment line every 15 seconds; not an event.
+      description: |
+        The line `: heartbeat` followed by an empty line. It has no `event:` and no `data:`, so `EventSource` does not
+        deliver it to the application.
+      contentType: text/plain
+      payload: {type: "null", description: No payload.}
+  schemas:
+    ServiceList:
+      type: array
+      items: {$ref: "#/components/schemas/Service"}
+    UserList:
+      type: array
+      items: {$ref: "#/components/schemas/User"}
+    User:
+      type: object
+      required: [id, username, role, disabled]
+      properties:
+        id: {type: integer}
+        username: {type: string, description: Lower case.}
+        role: {type: string, enum: [admin, user], description: "`admin` manages users, `user` reads the documentation."}
+        disabled: {type: boolean}
+    Service:
+      type: object
+      required: [name, status]
+      properties:
+        name: {type: string, description: "Display name and key for `GET /api/services/{name}/spec`."}
+        status: {type: string, enum: [up, down]}
+        lastSeen: {type: string, format: date-time, description: Last successful spec fetch.}
+        specHash: {type: string, description: Hash of the current spec; absent until a spec was fetched.}
+        error: {type: string, description: The last fetch or discovery problem.}
+        group: {type: string}
+        order: {type: integer}
+        title: {type: string, description: "`info.title` of the spec."}
+        version: {type: string, description: "`info.version` of the spec."}
+        openapi: {type: string, description: "The OpenAPI or Swagger version of the spec, e.g. `3.1.0` or `2.0`."}
+        endpoints: {type: integer, description: Number of operations in the spec.}
+        source: {type: string, enum: [docker, kubernetes], description: What found the service.}
+        health: {type: string, description: "Docker health status (`healthy`, `unhealthy`, `starting`); absent without a health check."}
+        replicas: {type: integer, description: Workloads behind the service (more than one when scaled).}
+        replicasUp: {type: integer, description: How many of them are up.}

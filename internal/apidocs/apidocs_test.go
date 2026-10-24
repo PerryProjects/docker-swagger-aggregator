@@ -1,6 +1,7 @@
 package apidocs_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"go.uber.org/zap"
 	"go.yaml.in/yaml/v3"
@@ -55,11 +57,13 @@ func TestDocumentsAreServedAsJSONAndYAML(t *testing.T) {
 
 	h := handler(t)
 	oa := loadJSON(t, h, "/spec/openapi.json")
-	if oa["openapi"] != "3.1.0" {
-		t.Fatalf("version: %v", oa["openapi"])
+	aa := loadJSON(t, h, "/spec/asyncapi.json")
+	if oa["openapi"] != "3.2.0" || aa["asyncapi"] != "3.1.0" { // 3.2: itemSchema describes the events of a text/event-stream
+		t.Fatalf("versions: %v %v", oa["openapi"], aa["asyncapi"])
 	}
 	for path, ct := range map[string]string{
-		"/spec/openapi.json": "application/json", "/spec/openapi.yaml": "application/yaml",
+		"/spec/openapi.json": "application/json", "/spec/asyncapi.json": "application/json",
+		"/spec/openapi.yaml": "application/yaml", "/spec/asyncapi.yaml": "application/yaml",
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -116,15 +120,17 @@ func TestEveryReferenceResolvesAndOperationIDsAreUnique(t *testing.T) {
 	t.Parallel()
 
 	h := handler(t)
-	doc := loadJSON(t, h, "/spec/openapi.json")
-	var rs []string
-	refs(doc, &rs)
-	if len(rs) == 0 {
-		t.Fatal("no references at all?")
-	}
-	for _, r := range rs {
-		if !resolve(doc, r) {
-			t.Errorf("dangling %s", r)
+	for _, name := range []string{"openapi", "asyncapi"} {
+		doc := loadJSON(t, h, "/spec/"+name+".json")
+		var rs []string
+		refs(doc, &rs)
+		if len(rs) == 0 {
+			t.Fatalf("%s: no references at all?", name)
+		}
+		for _, r := range rs {
+			if !resolve(doc, r) {
+				t.Errorf("%s: dangling %s", name, r)
+			}
 		}
 	}
 	seen := map[string]bool{}
@@ -172,9 +178,16 @@ func props(doc map[string]any, schema string) []string {
 func TestServiceSchemaMatchesWhatTheServerSends(t *testing.T) {
 	t.Parallel()
 
+	h := handler(t)
 	want := jsonFields(registry.Service{})
-	if got := props(loadJSON(t, handler(t), "/spec/openapi.json"), "Service"); !slices.Equal(got, want) {
-		t.Errorf("Service properties %v, the server sends %v", got, want)
+	for _, name := range []string{"openapi", "asyncapi"} {
+		if got := props(loadJSON(t, h, "/spec/"+name+".json"), "Service"); !slices.Equal(got, want) {
+			t.Errorf("%s: Service properties %v, the server sends %v", name, got, want)
+		}
+	}
+	// the AsyncAPI User is the OpenAPI User
+	if a, b := props(loadJSON(t, h, "/spec/asyncapi.json"), "User"), props(loadJSON(t, h, "/spec/openapi.json"), "User"); !slices.Equal(a, b) {
+		t.Errorf("User differs: asyncapi %v, openapi %v", a, b)
 	}
 }
 
@@ -281,7 +294,7 @@ func TestEveryDocumentedOperationExists(t *testing.T) {
 
 	oa := loadJSON(t, handler(t), "/spec/openapi.json")
 	s := newLiveStack(t)
-	skip := map[string]bool{"/api/events": true, "/auth/logout": true, "/mcp": true} // a stream never ends; logout would end the session used below; /mcp only exists when enabled (checked below)
+	skip := map[string]bool{"/api/events": true, "/auth/users/events": true, "/auth/logout": true, "/mcp": true} // streams never end (their behaviour is tested where they live); logout would end the session used below; /mcp only exists when enabled (checked below)
 	methods := []string{"get", "post", "put", "patch", "delete"}
 	n := 0
 	for path, item := range oa["paths"].(map[string]any) { //nolint:forcetypeassert // test
@@ -380,5 +393,48 @@ func TestMCPDocumentationMatchesTheServer(t *testing.T) {
 	rec = call(http.MethodPost, mcpToken, both, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_spec","arguments":{"service":"nope"}}}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isError":true`) {
 		t.Errorf("a failed tool call: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUserStreamMatchesTheDocuments reads the first event of the real /auth/users/events and checks it against the
+// documented event name and the User schema.
+func TestUserStreamMatchesTheDocuments(t *testing.T) {
+	t.Parallel()
+
+	oa := loadJSON(t, handler(t), "/spec/openapi.json")
+	s := newLiveStack(t)
+	srv := httptest.NewServer(s.web)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/auth/users/events", nil)
+	req.AddCookie(s.session)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" || resp.Header.Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("%d %v", resp.StatusCode, resp.Header)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	var event, data string
+	for sc.Scan() && data == "" {
+		if v, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
+			event = v
+		}
+		if v, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+			data = v
+		}
+	}
+	if event != "users" {
+		t.Fatalf("event name %q, documented as users", event)
+	}
+	var list []json.RawMessage
+	if err = json.Unmarshal([]byte(data), &list); err != nil || len(list) != 1 {
+		t.Fatalf("data: %v %q", err, data)
+	}
+	if got, want := keys(t, list[0]), props(oa, "User"); !slices.Equal(got, want) {
+		t.Errorf("a user in the stream has %v, documented %v", got, want)
 	}
 }

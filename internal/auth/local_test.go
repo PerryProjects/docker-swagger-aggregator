@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -400,5 +401,112 @@ func TestSessionCookieSameSiteIsConfigurable(t *testing.T) {
 				t.Fatalf("session cookie: %+v", cookies)
 			}
 		})
+	}
+}
+
+// sse reads "event: x / data: y" blocks from a stream into a channel; it closes when the stream ends.
+func sse(t *testing.T, c *client, path string) (events <-chan [2]string, status int) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, c.e.URL+path, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	resp, err := c.c.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, resp.StatusCode
+	}
+	out := make(chan [2]string, 16)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+		var event string
+		sc := bufio.NewScanner(resp.Body)
+		sc.Buffer(make([]byte, 64<<10), 1<<20)
+		for sc.Scan() {
+			line := sc.Text()
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				out <- [2]string{event, strings.TrimPrefix(line, "data: ")}
+			}
+		}
+	}()
+	return out, resp.StatusCode
+}
+
+func next(t *testing.T, ch <-chan [2]string) (string, bool) {
+	t.Helper()
+	select {
+	case ev, ok := <-ch:
+		return ev[1], ok
+	case <-time.After(3 * time.Second):
+		t.Fatal("no event within 3 s")
+		return "", false
+	}
+}
+
+func TestUserEventStreamIsAdminOnlyAndFollowsChanges(t *testing.T) {
+	t.Parallel()
+
+	e := newLocal(t, true)
+	admin := e.admin(t)
+	admin.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "gina", "password": "gina-password-1"})
+
+	if _, status := sse(t, e.client(t), "/auth/users/events"); status != http.StatusUnauthorized {
+		t.Fatalf("no session: want 401, got %d", status)
+	}
+	gina := e.client(t)
+	gina.mustDo(200, "POST", "/auth/login", map[string]any{"username": "gina", "password": "gina-password-1"})
+	if _, status := sse(t, gina, "/auth/users/events"); status != http.StatusForbidden {
+		t.Fatalf("a plain user: want 403, got %d", status)
+	}
+
+	ch, status := sse(t, admin, "/auth/users/events")
+	if status != http.StatusOK {
+		t.Fatalf("admin: %d", status)
+	}
+	first, _ := next(t, ch)
+	if !strings.Contains(first, `"username":"admin"`) || !strings.Contains(first, `"username":"gina"`) || strings.Contains(first, "passwordHash") {
+		t.Fatalf("the first event is the whole list: %s", first)
+	}
+
+	// another browser of the same admin changes something: the stream shows it
+	other := e.client(t)
+	other.mustDo(200, "POST", "/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"})
+	other.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "hank", "password": "hank-password-1"})
+	if ev, _ := next(t, ch); !strings.Contains(ev, `"username":"hank"`) {
+		t.Fatalf("created user missing: %s", ev)
+	}
+	other.mustDo(200, "PATCH", "/auth/users/"+userID(t, other, "hank"), map[string]any{"disabled": true})
+	if ev, _ := next(t, ch); !strings.Contains(ev, `"username":"hank","role":"user","disabled":true`) {
+		t.Fatalf("disabled flag missing: %s", ev)
+	}
+	other.mustDo(http.StatusNoContent, "DELETE", "/auth/users/"+userID(t, other, "hank"), nil)
+	if ev, _ := next(t, ch); strings.Contains(ev, `"username":"hank"`) {
+		t.Fatalf("deleted user still listed: %s", ev)
+	}
+}
+
+func TestUserEventStreamEndsWhenTheAdminIsDemoted(t *testing.T) {
+	t.Parallel()
+
+	e := newLocal(t, true)
+	root := e.admin(t)
+	root.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "ivy", "password": "ivy-password-12", "role": "admin"})
+	ivy := e.client(t)
+	ivy.mustDo(200, "POST", "/auth/login", map[string]any{"username": "ivy", "password": "ivy-password-12"})
+	ch, status := sse(t, ivy, "/auth/users/events")
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	next(t, ch) // the first snapshot
+
+	root.mustDo(200, "PATCH", "/auth/users/"+userID(t, root, "ivy"), map[string]any{"role": "user"})
+	if _, open := next(t, ch); open {
+		t.Fatal("a demoted admin must not keep receiving the user list")
 	}
 }
