@@ -1,0 +1,527 @@
+openapi: 3.1.0
+info:
+  title: Swagger Aggregator HTTP API
+  version: 1.0.0
+  summary: What a frontend talks to - the same interface the bundled UI uses.
+  description: |
+    `swagger-aggregator-web` serves the UI and forwards `/api/*` to the API server, so a frontend sees **one origin**.
+    Use this interface to build your own frontend: list the documented services, read their OpenAPI specs, follow
+    status changes live and (optionally) manage users.
+
+    **Live updates** are a Server-Sent Events stream, described in the separate **AsyncAPI** document
+    (`/spec/asyncapi.json`, shown next to this one).
+
+    **Authentication** depends on `SWAGGER_AGGREGATOR_WEB_AUTH`:
+    - `none`: no authentication.
+    - `build_in`: sign in with `POST /auth/login`; the session is an `HttpOnly` cookie. `/api/*` answers `401` without it.
+      Browsers send the cookie automatically (use `credentials: "include"` for `fetch` across origins; cross-origin use needs
+      CORS, which this server does not provide, so host your frontend on the same origin, e.g. by pointing `--dir` at its build).
+    - `oidc`: the browser is redirected to the identity provider (`/auth/login` is then a redirect, `/auth/session` etc. do not exist).
+
+    The `/auth/*` operations below are those of `build_in`. The read-only **MCP** server for AI assistants lives at `/mcp`
+    (Streamable HTTP, bearer token) and is not described here.
+  license:
+    name: see the repository
+    url: https://github.com/perryprojects/docker-swagger-aggregator
+servers:
+  - url: /
+    description: The origin that serves the UI (a reverse-proxy base path such as /docs is prepended by the proxy).
+tags:
+  - name: Services
+    description: The discovered services and their OpenAPI specs.
+  - name: Proxy
+    description: Same-origin proxies used by "Try it".
+  - name: Auth
+    description: Sign in, sign out, first-run setup (auth=build_in).
+  - name: Users
+    description: User management (auth=build_in, admins only).
+  - name: Meta
+    description: Health and the documents describing this API.
+paths:
+  /api/services:
+    get:
+      tags: [Services]
+      operationId: listServices
+      summary: List the discovered services
+      description: Every service, including those that never delivered a spec (they have no `specHash` and usually an `error`).
+      security: [{}, {cookieAuth: []}]
+      responses:
+        "200":
+          description: The services, ordered by name.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-cache}}
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/Service"}}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+  /api/services/{name}/spec:
+    get:
+      tags: [Services]
+      operationId: getServiceSpec
+      summary: Read the last known OpenAPI/Swagger spec of a service
+      description: |
+        Canonical JSON (keys sorted; YAML specs are converted). The server location inside it points at the same-origin
+        proxy (`/api/proxy/{id}`) or at the service's `server-url`. The `ETag` is the spec hash from `listServices`:
+        send it as `If-None-Match` to get `304`.
+      security: [{}, {cookieAuth: []}]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The service name from `listServices` (URL-encode it).
+          schema: {type: string}
+        - name: If-None-Match
+          in: header
+          schema: {type: string}
+      responses:
+        "200":
+          description: The spec.
+          headers:
+            ETag: {schema: {type: string}, description: 'The spec hash in quotes, e.g. `"b795927e5b5fc9b8"`.'}
+          content:
+            application/json:
+              schema: {type: object, description: An OpenAPI 3.x or Swagger 2.0 document.}
+        "304": {description: Not modified (the `ETag` matches).}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: Unknown service, or its spec has not been fetched yet.
+          content:
+            text/plain:
+              schema: {type: string, examples: ["unknown service", "spec not fetched yet"]}
+  /api/events:
+    get:
+      tags: [Services]
+      operationId: streamEvents
+      summary: Follow the service list live (Server-Sent Events)
+      description: |
+        A long-lived `text/event-stream`. The full service list is sent on connect and again on every visible change; a
+        `: heartbeat` comment keeps idle proxies from closing the connection. See the **AsyncAPI** document for the
+        messages. Use `EventSource` (it reconnects by itself and sends the session cookie for the same origin).
+      security: [{}, {cookieAuth: []}]
+      responses:
+        "200":
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  `event: services` + `data: <JSON array of Service>` blocks. Documented as AsyncAPI channel `services`.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+  /api/proxy/{id}/{path}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The workload ID (container ID / Kubernetes UID) that the `servers` entry of a service's spec contains.
+        schema: {type: string}
+      - name: path
+        in: path
+        required: true
+        description: The path below the service's base URL (may contain slashes).
+        schema: {type: string}
+    get:
+      tags: [Proxy]
+      operationId: proxyGet
+      summary: Forward a request to a service
+      description: |
+        Used by "Try it": the browser calls the service through this origin (no CORS). The target is looked up by ID in
+        the registry, never taken from the request. The request body is limited to 10 MiB; cookies, `Origin` and `Referer`
+        are not forwarded. Every HTTP method is forwarded; they are listed separately only for the tools that need that.
+      security: [{}, {cookieAuth: []}]
+      responses:
+        default:
+          description: Whatever the service answers.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: Unknown or stopped service.
+          content: {text/plain: {schema: {type: string, const: unknown or stopped service}}}
+        "502":
+          description: The service is unreachable.
+          content: {text/plain: {schema: {type: string, const: upstream unreachable}}}
+    post:
+      tags: [Proxy]
+      operationId: proxyPost
+      summary: Forward a POST request to a service
+      description: "Same as `GET`: the request is forwarded to the service (see there for the limits)."
+      security: [{}, {cookieAuth: []}]
+      responses:
+        default:
+          description: Whatever the service answers.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: Unknown or stopped service.
+          content: {text/plain: {schema: {type: string, const: unknown or stopped service}}}
+        "502":
+          description: The service is unreachable.
+          content: {text/plain: {schema: {type: string, const: upstream unreachable}}}
+    put:
+      tags: [Proxy]
+      operationId: proxyPut
+      summary: Forward a PUT request to a service
+      description: "Same as `GET`: the request is forwarded to the service (see there for the limits)."
+      security: [{}, {cookieAuth: []}]
+      responses:
+        default:
+          description: Whatever the service answers.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: Unknown or stopped service.
+          content: {text/plain: {schema: {type: string, const: unknown or stopped service}}}
+        "502":
+          description: The service is unreachable.
+          content: {text/plain: {schema: {type: string, const: upstream unreachable}}}
+    patch:
+      tags: [Proxy]
+      operationId: proxyPatch
+      summary: Forward a PATCH request to a service
+      description: "Same as `GET`: the request is forwarded to the service (see there for the limits)."
+      security: [{}, {cookieAuth: []}]
+      responses:
+        default:
+          description: Whatever the service answers.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: Unknown or stopped service.
+          content: {text/plain: {schema: {type: string, const: unknown or stopped service}}}
+        "502":
+          description: The service is unreachable.
+          content: {text/plain: {schema: {type: string, const: upstream unreachable}}}
+    delete:
+      tags: [Proxy]
+      operationId: proxyDelete
+      summary: Forward a DELETE request to a service
+      description: "Same as `GET`: the request is forwarded to the service (see there for the limits)."
+      security: [{}, {cookieAuth: []}]
+      responses:
+        default:
+          description: Whatever the service answers.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: Unknown or stopped service.
+          content: {text/plain: {schema: {type: string, const: unknown or stopped service}}}
+        "502":
+          description: The service is unreachable.
+          content: {text/plain: {schema: {type: string, const: upstream unreachable}}}
+  /api/scalar-proxy:
+    get:
+      tags: [Proxy]
+      operationId: scalarProxy
+      summary: Scalar's proxyUrl endpoint
+      description: |
+        Forwards a request to an absolute public URL that lies below a registered service's `server-url`. Only such URLs
+        are accepted. Any HTTP method works.
+      security: [{}, {cookieAuth: []}]
+      parameters:
+        - name: scalar_url
+          in: query
+          required: true
+          schema: {type: string, format: uri}
+      responses:
+        default: {description: Whatever the service answers.}
+        "400": {description: "`scalar_url` is not an http(s) URL."}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {description: No registered service for this URL.}
+  /healthz:
+    get:
+      tags: [Meta]
+      operationId: health
+      summary: Liveness probe
+      description: Always public, also with authentication enabled.
+      security: []
+      responses:
+        "200":
+          description: Alive.
+          content: {text/plain: {schema: {type: string, const: ok}}}
+  /spec/openapi.json:
+    get:
+      tags: [Meta]
+      operationId: getOpenAPI
+      summary: This document (JSON)
+      security: []
+      responses:
+        "200": {description: This OpenAPI document., content: {application/json: {schema: {type: object}}}}
+  /spec/openapi.yaml:
+    get:
+      tags: [Meta]
+      operationId: getOpenAPIYAML
+      summary: This document (YAML)
+      security: []
+      responses:
+        "200": {description: This OpenAPI document., content: {application/yaml: {schema: {type: string}}}}
+  /spec/asyncapi.json:
+    get:
+      tags: [Meta]
+      operationId: getAsyncAPI
+      summary: The AsyncAPI document of the event stream (JSON)
+      security: []
+      responses:
+        "200": {description: The AsyncAPI 3.1 document., content: {application/json: {schema: {type: object}}}}
+  /spec/asyncapi.yaml:
+    get:
+      tags: [Meta]
+      operationId: getAsyncAPIYAML
+      summary: The AsyncAPI document of the event stream (YAML)
+      security: []
+      responses:
+        "200": {description: The AsyncAPI 3.1 document., content: {application/yaml: {schema: {type: string}}}}
+  /auth/session:
+    get:
+      tags: [Auth]
+      operationId: getSession
+      summary: Which authentication is active and who is signed in
+      description: Always answers `200`. A frontend calls it first to decide between the login form, the setup form and the app.
+      security: []
+      responses:
+        "200":
+          description: The session state.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionInfo"}
+              examples:
+                signedOut: {value: {mode: build_in, setupRequired: false}}
+                signedIn: {value: {mode: build_in, setupRequired: false, user: {id: 1, username: admin, role: admin, disabled: false}}}
+                newInstance: {value: {mode: build_in, setupRequired: true}}
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Sign in
+      description: |
+        Sets the session cookie. A failed attempt delays the next attempt for that username (1 s, 2 s, ... up to 30 s):
+        during the delay even the right password gets `429` with `Retry-After`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Credentials"}
+      responses:
+        "200":
+          description: Signed in. The `Set-Cookie` header carries the session.
+          headers:
+            Set-Cookie: {schema: {type: string}, description: "`swagger_aggregator_session`, HttpOnly, SameSite=Lax (Secure over HTTPS)."}
+          content:
+            application/json:
+              schema: {type: object, required: [user], properties: {user: {$ref: "#/components/schemas/User"}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {description: Wrong username or password (also for unknown or disabled users)., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "415": {$ref: "#/components/responses/NotJSON"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Sign out
+      description: Clears the session cookie (this browser only).
+      security: []
+      responses:
+        "204": {description: Signed out.}
+  /auth/setup:
+    post:
+      tags: [Auth]
+      operationId: setup
+      summary: Register the first admin
+      description: |
+        Only while the instance has no users. Needs the setup token that is printed in the log at startup (or set with
+        `SWAGGER_AGGREGATOR_WEB_SETUP_TOKEN`). Signs the new admin in.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: "#/components/schemas/Credentials"}
+                - type: object
+                  required: [token]
+                  properties:
+                    token: {type: string, description: The setup token.}
+      responses:
+        "201":
+          description: The admin was created and is signed in.
+          content:
+            application/json:
+              schema: {type: object, required: [user], properties: {user: {$ref: "#/components/schemas/User"}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {description: Wrong setup token., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "409": {description: The instance has users already., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "415": {$ref: "#/components/responses/NotJSON"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+  /auth/password:
+    post:
+      tags: [Auth]
+      operationId: changePassword
+      summary: Change the own password
+      description: Ends all other sessions of the user; the calling browser gets a fresh one.
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current, new]
+              properties:
+                current: {type: string}
+                new: {type: string, minLength: 10, maxLength: 72}
+      responses:
+        "204": {description: Changed.}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {description: The current password is wrong., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "415": {$ref: "#/components/responses/NotJSON"}
+  /auth/users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: List the users
+      security: [{cookieAuth: []}]
+      responses:
+        "200":
+          description: All users ordered by name.
+          content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/User"}}}}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/AdminOnly"}
+    post:
+      tags: [Users]
+      operationId: createUser
+      summary: Create a user
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: "#/components/schemas/Credentials"}
+                - type: object
+                  properties:
+                    role: {$ref: "#/components/schemas/Role"}
+      responses:
+        "201": {description: Created., content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/AdminOnly"}
+        "409": {description: The username is taken., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "415": {$ref: "#/components/responses/NotJSON"}
+  /auth/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: integer, minimum: 1}
+    patch:
+      tags: [Users]
+      operationId: updateUser
+      summary: Change a user
+      description: |
+        Any of password, role and disabled. A new password, a disabled user or a changed role ends that user's sessions.
+        The last active admin cannot be demoted or disabled.
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: {type: string, minLength: 10, maxLength: 72}
+                role: {$ref: "#/components/schemas/Role"}
+                disabled: {type: boolean}
+      responses:
+        "200": {description: Updated., content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/AdminOnly"}
+        "404": {description: Unknown user., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "409": {description: This would leave no active admin., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "415": {$ref: "#/components/responses/NotJSON"}
+    delete:
+      tags: [Users]
+      operationId: deleteUser
+      summary: Delete a user
+      description: Not yourself, and not the last active admin.
+      security: [{cookieAuth: []}]
+      responses:
+        "204": {description: Deleted.}
+        "400": {description: You cannot delete yourself or the id is malformed., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/AdminOnly"}
+        "404": {description: Unknown user., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+        "409": {description: This would leave no active admin., content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: swagger_aggregator_session
+      description: The session cookie set by `login` / `setup` (auth=build_in) or by the OpenID Connect login (auth=oidc).
+  schemas:
+    Service:
+      type: object
+      required: [name, status]
+      properties:
+        name: {type: string, description: Display name and key for the other operations., examples: [orders]}
+        status:
+          type: string
+          enum: [up, down]
+          description: "`up` only if the workload runs, its health check (if any) is healthy and the spec could be fetched."
+        lastSeen: {type: string, format: date-time, description: Last successful spec fetch.}
+        specHash: {type: string, description: Hash of the current spec; absent until a spec was fetched. Equals the spec's ETag.}
+        error: {type: string, description: The last fetch or discovery problem.}
+        group: {type: string, description: Optional group label.}
+        order: {type: integer, description: Optional sort key inside a group.}
+    SessionInfo:
+      type: object
+      required: [mode, setupRequired]
+      properties:
+        mode: {type: string, const: build_in}
+        setupRequired: {type: boolean, description: "True while there is no user: show the setup form." }
+        user: {$ref: "#/components/schemas/User"}
+    User:
+      type: object
+      required: [id, username, role, disabled]
+      properties:
+        id: {type: integer}
+        username: {type: string, description: Lower case.}
+        role: {$ref: "#/components/schemas/Role"}
+        disabled: {type: boolean}
+    Role:
+      type: string
+      enum: [admin, user]
+      description: "`admin` manages users, `user` reads the documentation."
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$", description: Case-insensitive; stored lower case.}
+        password: {type: string, minLength: 10, maxLength: 72}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+  responses:
+    Unauthenticated:
+      description: No valid session.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+          example: {error: unauthenticated}
+    AdminOnly:
+      description: The user is not an admin.
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    BadRequest:
+      description: Invalid input; the message says which field.
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    NotJSON:
+      description: The content type must be `application/json`.
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    TooManyAttempts:
+      description: Failed attempts are delayed.
+      headers:
+        Retry-After: {schema: {type: integer}, description: Seconds to wait.}
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}

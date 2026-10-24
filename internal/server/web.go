@@ -7,6 +7,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	"github.com/perryprojects/docker-swagger-aggregator/internal/apidocs"
 )
 
 // WebConfig holds the dependencies of the static web server.
@@ -39,6 +41,9 @@ func NewWebHandler(cfg WebConfig) http.Handler {
 		FlushInterval: -1, // SSE must not be buffered
 		BufferPool:    newBufferPool(),
 	})
+	if spec, err := apidocs.Handler(); err == nil { // the documents are embedded and tested; an error cannot happen at runtime
+		mux.Handle("/spec/", spec)
+	}
 	mux.Handle("/", spa(cfg.UI))
 	var h http.Handler = mux
 	if cfg.Protect != nil {
