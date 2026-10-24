@@ -43,6 +43,16 @@ spec:
           env:
             - {name: SWAGGER_AGGREGATOR_WEB_DIR, value: /web/dist}
             - {name: SWAGGER_AGGREGATOR_WEB_API, value: "http://127.0.0.1:8080"}
+            # Optional login (see README, "Authentication"); put the secrets into a Secret, not into this file:
+            # - {name: SWAGGER_AGGREGATOR_WEB_AUTH, value: oidc}
+            # - {name: SWAGGER_AGGREGATOR_WEB_OIDC_ISSUER, value: "https://auth.example.com"}
+            # - {name: SWAGGER_AGGREGATOR_WEB_OIDC_REDIRECT_URL, value: "https://docs.example.com/auth/callback"}
+            # - name: SWAGGER_AGGREGATOR_WEB_OIDC_CLIENT_ID
+            #   valueFrom: {secretKeyRef: {name: swagger-aggregator-oidc, key: client-id}}
+            # - name: SWAGGER_AGGREGATOR_WEB_OIDC_CLIENT_SECRET
+            #   valueFrom: {secretKeyRef: {name: swagger-aggregator-oidc, key: client-secret}}
+            # - name: SWAGGER_AGGREGATOR_WEB_SESSION_SECRET
+            #   valueFrom: {secretKeyRef: {name: swagger-aggregator-oidc, key: session-secret}}
           ports: [{name: http, containerPort: 3000}]
           readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
           livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 15}

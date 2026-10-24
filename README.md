@@ -293,6 +293,14 @@ Note: `vue-tsc` (typecheck) needs Node; the Docker image has none, so it builds 
 `--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`), the `--auth`/`--oidc-*`/`--session-*` options ([Authentication](#authentication)), `--base-path`/`SWAGGER_AGGREGATOR_WEB_BASE_PATH` (none; e.g. `/docs`,
 stripped when present, so it works with or without a `StripPrefix` in front; set the same value on the API).
 
+## CI/CD
+
+`.github/workflows/ci.yml` (GitHub Actions) and `.gitlab-ci.yml` (GitLab CI) run the same checks: `go vet` + `go test -race`, golangci-lint,
+`govulncheck`, the web typecheck + build + Playwright e2e tests, rendering of the Kubernetes/compose files and a multi-arch (amd64, arm64)
+image build. The image is pushed to `ghcr.io/<owner>/<repo>` (GitHub) or the project's container registry (GitLab) from the default branch and
+from `v*` tags; merge/pull requests only prove that it builds. Neither pipeline has run yet: they were checked for valid YAML and by running
+their commands locally, not on a runner. Pin the lint version and the base images once you want reproducible builds.
+
 ## Authentication
 
 Off by default (`SWAGGER_AGGREGATOR_WEB_AUTH=none`). With `oidc`, `swagger-aggregator-web` requires a login at any OpenID Connect provider
