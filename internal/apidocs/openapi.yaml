@@ -325,7 +325,7 @@ paths:
 
         | Tool | Arguments | Returns (`structuredContent`) |
         |---|---|---|
-        | `list_services` | none | `{services: [{name, status, group?, hasSpec, problem?}]}`: start here |
+        | `list_services` | none | `{services: [{name, status, group?, title?, version?, endpoints?, hasSpec, problem?}]}`: start here |
         | `list_endpoints` | `service` | `{endpoints: [{method, path, summary?, operationId?, tags?}]}`: cheaper than the whole spec |
         | `search_endpoints` | `query`, `limit?` (default 25, at most 100) | `{matches: [{service, method, path, ...}], truncated?, unavailable?}`: case-insensitive, over name, path, summary, description, operationId and tags |
         | `get_spec` | `service` | the complete spec as JSON **text** (it can be large) |

@@ -154,9 +154,18 @@ known spec.
 
 ## Service status page
 
-`/status` lists **every** discovered service (also those that never delivered a spec, which are not in the docs):
-up/down as text and marker, last successful fetch, the current problem (fetch error, wrong network, invalid labels, ...) and
-an "Open docs" link. It updates live over the same SSE stream. The docs sidebar links to it. It is a PrimeVue page (light/dark follows the OS). Every page has the same navigation: documentation, API reference, status and, for admins, users.
+`/status` lists **every** discovered service, also those that never delivered a spec (they are not in the docs), and updates live
+over the same event stream (a *Live* badge shows that it is connected; otherwise it polls). Light/dark follows the OS; it works on a phone.
+
+- **Summary tiles:** services, up, down and the total number of endpoints. The *Up* and *Down* tiles are filters.
+- **Search:** one box over name, spec title, group, problem, version, format, source and status; every word must match
+  (`shop kubernetes`). `/` jumps to it, `Esc` clears it. Plus a status switch (*All / Up / Down*) and, when services have groups, a group filter.
+  The filter is in the URL (`/status?q=billing&status=down`), so a filtered view can be shared or reloaded.
+- **Table:** status, service (with the spec's title and version and, below, the problem), endpoints, replicas (`2/3` up), source (Docker or
+  Kubernetes), last seen (the exact time on hover), and an *Open docs* link. Columns sort. A row opens a detail panel: title, version, spec
+  format (OpenAPI 3.x / Swagger 2.0), endpoints, source, health check, replicas, exact last-seen time, spec hash and the full problem.
+- **Where the details come from:** the spec (title, version, format, number of operations), Docker's health status, the replica group and the source that
+  found the service. They change rarely, so they do not make the event stream fire on every probe.
 
 ## HTTP API
 
@@ -165,10 +174,11 @@ an "Open docs" link. It updates live over the same SSE stream. The docs sidebar 
 | `GET /api/services` | `[{name,status,lastSeen,specHash,error,group,order}]` |
 | `GET /api/services/{name}/spec` | last known spec as JSON, ETag = spec hash |
 | `GET /api/events` | SSE: event `services` with the full list on connect and on every change, `: heartbeat` comment every 15s |
+| `GET /auth/users/events` | SSE for admins (`auth=build_in`): event `users` with the full user list on connect and on every change |
 | `ANY /api/proxy/{containerID}/{path...}` | same-origin reverse proxy to that container (used by "Try it", see below) |
 | `ANY /api/scalar-proxy?scalar_url=…` | Scalar's `proxyUrl` endpoint: forwards a public URL below a registered service's `server-url` to that container |
 | `GET /healthz` | `ok` |
-| `GET /spec/openapi.{json,yaml}` | this interface as OpenAPI 3.1 (REST, the SSE events, MCP), see [Build your own frontend](#build-your-own-frontend); `/auth/*` is the built-in login |
+| `GET /spec/{openapi,asyncapi}.{json,yaml}` | this interface as OpenAPI 3.2 (REST, the event streams, MCP) and AsyncAPI 3.1 (the event streams), see [Build your own frontend](#build-your-own-frontend); `/auth/*` is the built-in login |
 
 `lastSeen` is the last successful fetch. Changes that only move `lastSeen` do not emit an SSE event.
 YAML specs are accepted and served as JSON.
@@ -176,11 +186,18 @@ YAML specs are accepted and served as JSON.
 ## Build your own frontend
 
 The UI that ships with this program is only one client of an HTTP interface that is documented in the program itself:
-the **API** page (`/api-docs`) shows it with Scalar, as one OpenAPI 3.1 document: the REST endpoints, the live event
-stream (every Server-Sent Event, with the wire format and a browser example) and the MCP endpoint (JSON-RPC, tools, examples). It is also
-served as a plain file for code generators and your own tooling: `/spec/openapi.json` and `/spec/openapi.yaml` (public, like
-`/healthz`). The source is [`internal/apidocs/openapi.yaml`](internal/apidocs/openapi.yaml); tests check it against the code (the schemas against
-the structs and real responses, every documented operation against the real handlers, the MCP section against the real `/mcp`).
+the **API** page (`/api-docs`) shows it with Scalar, as two documents with a switcher:
+
+- **OpenAPI 3.2**: the REST endpoints, the two event streams and the MCP endpoint (JSON-RPC, tools, examples). The event streams are described the
+  standard way, with `itemSchema` on `text/event-stream` (the event name as a constant, the JSON in `data` typed through `contentMediaType` /
+  `contentSchema`), which is what tools that generate typed event handlers read. That is why the document is 3.2: `itemSchema` does not exist in 3.1.
+- **AsyncAPI 3.1**: the same two event streams as channels and messages (`GET /api/events`: the service list; `GET /auth/users/events`: the user list,
+  admins only). Scalar renders AsyncAPI 3.x natively; the SDK generator for it is experimental, as Scalar says itself.
+
+Both are also served as plain files for code generators and your own tooling: `/spec/openapi.{json,yaml}` and `/spec/asyncapi.{json,yaml}` (public, like
+`/healthz`). The sources are [`internal/apidocs/openapi.yaml`](internal/apidocs/openapi.yaml) and [`asyncapi.yaml`](internal/apidocs/asyncapi.yaml); tests check them against
+the code (the schemas against the structs and real responses, every documented operation against the real handlers, the user stream and the MCP section
+against the real endpoints). I checked that both validate and render in Scalar; I could **not** check what Scalar's cloud SDK generator makes of the `itemSchema`.
 
 ```js
 const services = await (await fetch('/api/services')).json()                    // [{name, status, specHash, ...}]
@@ -353,6 +370,7 @@ go run ./cmd/swagger-aggregator --listen :8080
 # frontend with hot reload (bun) - no Go web server needed: Vite serves the UI and proxies /api (incl. SSE), /auth and /mcp
 # to the backend; /spec/openapi.* (the API page) is read from internal/apidocs/openapi.yaml by a Vite plugin
 cd web && bun install && bun run dev      # http://localhost:5173, backend http://localhost:8080 = the API server
+cd web && bun run prod                    # the same without hot reload: builds the UI and serves the production build (http://localhost:4173)
 # other backend address: SWAGGER_AGGREGATOR_BACKEND=http://host:port bun run dev
 # with auth=none the API server alone is enough; to try the login (auth=build_in/oidc) or MCP, point the backend at the
 # Go web server (swagger-aggregator-web), which answers /auth and /mcp
@@ -458,7 +476,8 @@ The schema is created by Atlas migrations that are embedded in the binary and ap
   started, reachable instance. Wrong tokens are throttled. The first account is an admin.
 - **Or from the environment:** `SWAGGER_AGGREGATOR_WEB_ADMIN_USER` + `SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD` (or `..._ADMIN_PASSWORD_HASH`,
   a bcrypt hash) create the admin on the first start instead of the setup page. The environment **never overwrites** an existing account.
-- **Users page** (admins, `/users`): create users, set a new password, change the role, disable, delete. Roles: `admin` (manages users)
+- **Users page** (admins, `/users`): create users, set a new password, change the role, disable, delete. The list is live (Server-Sent Events,
+  `GET /auth/users/events`): a change made by another admin or in another tab shows up without a reload. Roles: `admin` (manages users)
   and `user` (reads the docs). The last active admin cannot be demoted, disabled or deleted, nobody can delete themselves. Every user can
   change their own password in the account menu.
 - **Sessions:** an encrypted, signed `HttpOnly` + `SameSite=Lax` cookie (`Secure` behind HTTPS). A password change, disabling or deleting a
@@ -492,7 +511,7 @@ stateless, the official Go SDK). It is **read-only**: it cannot call the documen
 
 | Tool | Does |
 |---|---|
-| `list_services` | the services with status, group, whether a spec exists and the last problem |
+| `list_services` | the services with status, group, spec title and version, number of endpoints, whether a spec exists and the last problem |
 | `list_endpoints` | method, path, summary, operationId, tags of one service |
 | `search_endpoints` | search all services by a word in name, path, summary, description, operationId or tags |
 | `get_spec` | the complete spec of one service as JSON (can be large) |
