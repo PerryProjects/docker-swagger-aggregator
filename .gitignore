@@ -10,3 +10,8 @@ web/playwright-report
 
 # per-user copies of the example environment files
 /examples/*.env
+
+# local secrets (e.g. the PrimeVue licence key), never commit
+.env
+.env.local
+*.local

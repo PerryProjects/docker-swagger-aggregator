@@ -20,6 +20,9 @@ async function start() {
       ])
     app
       .use(PrimeVue, {
+        // PrimeVue 5 verifies this key offline in the browser (a missing, invalid or expired key shows a banner).
+        // It is not in the repository: it is given at build time as VITE_PRIMEVUE_LICENSE (see README, "UI stack and licences").
+        license: import.meta.env.VITE_PRIMEVUE_LICENSE,
         theme: {
           preset: Aura,
           // follow the OS setting; the layer name matches the order declared in style.css
