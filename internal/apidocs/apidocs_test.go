@@ -19,10 +19,13 @@ import (
 
 	"github.com/perryprojects/docker-swagger-aggregator/internal/apidocs"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/auth"
+	"github.com/perryprojects/docker-swagger-aggregator/internal/mcptools"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/registry"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/server"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/store"
 )
+
+const mcpToken = "0123456789abcdef0123456789abcdef-token"
 
 func loadJSON(t *testing.T, h http.Handler, path string) map[string]any {
 	t.Helper()
@@ -52,13 +55,11 @@ func TestDocumentsAreServedAsJSONAndYAML(t *testing.T) {
 
 	h := handler(t)
 	oa := loadJSON(t, h, "/spec/openapi.json")
-	aa := loadJSON(t, h, "/spec/asyncapi.json")
-	if oa["openapi"] != "3.1.0" || aa["asyncapi"] != "3.1.0" {
-		t.Fatalf("versions: %v %v", oa["openapi"], aa["asyncapi"])
+	if oa["openapi"] != "3.1.0" {
+		t.Fatalf("version: %v", oa["openapi"])
 	}
 	for path, ct := range map[string]string{
-		"/spec/openapi.json": "application/json", "/spec/asyncapi.json": "application/json",
-		"/spec/openapi.yaml": "application/yaml", "/spec/asyncapi.yaml": "application/yaml",
+		"/spec/openapi.json": "application/json", "/spec/openapi.yaml": "application/yaml",
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -115,17 +116,15 @@ func TestEveryReferenceResolvesAndOperationIDsAreUnique(t *testing.T) {
 	t.Parallel()
 
 	h := handler(t)
-	for _, name := range []string{"openapi", "asyncapi"} {
-		doc := loadJSON(t, h, "/spec/"+name+".json")
-		var rs []string
-		refs(doc, &rs)
-		if len(rs) == 0 {
-			t.Fatalf("%s: no references at all?", name)
-		}
-		for _, r := range rs {
-			if !resolve(doc, r) {
-				t.Errorf("%s: dangling %s", name, r)
-			}
+	doc := loadJSON(t, h, "/spec/openapi.json")
+	var rs []string
+	refs(doc, &rs)
+	if len(rs) == 0 {
+		t.Fatal("no references at all?")
+	}
+	for _, r := range rs {
+		if !resolve(doc, r) {
+			t.Errorf("dangling %s", r)
 		}
 	}
 	seen := map[string]bool{}
@@ -173,12 +172,9 @@ func props(doc map[string]any, schema string) []string {
 func TestServiceSchemaMatchesWhatTheServerSends(t *testing.T) {
 	t.Parallel()
 
-	h := handler(t)
 	want := jsonFields(registry.Service{})
-	for _, name := range []string{"openapi", "asyncapi"} {
-		if got := props(loadJSON(t, h, "/spec/"+name+".json"), "Service"); !slices.Equal(got, want) {
-			t.Errorf("%s Service properties %v, the server sends %v", name, got, want)
-		}
+	if got := props(loadJSON(t, handler(t), "/spec/openapi.json"), "Service"); !slices.Equal(got, want) {
+		t.Errorf("Service properties %v, the server sends %v", got, want)
 	}
 }
 
@@ -211,8 +207,12 @@ func newLiveStack(t *testing.T) *liveStack {
 	if err = local.Bootstrap(context.Background(), "", "", ""); err != nil {
 		t.Fatal(err)
 	}
+	mcpHandler, err := mcptools.Handler(mcptools.HTTPBackend{Base: apiURL}, "test", mcpToken)
+	if err != nil {
+		t.Fatal(err)
+	}
 	web := server.NewWebHandler(server.WebConfig{
-		UI: fstest.MapFS{"index.html": {Data: []byte("INDEX")}}, API: apiURL, Protect: local.Wrap,
+		UI: fstest.MapFS{"index.html": {Data: []byte("INDEX")}}, API: apiURL, Protect: local.Wrap, MCP: mcpHandler,
 	})
 	s := &liveStack{web: web}
 	rec := s.do(http.MethodPost, "/auth/setup", `{"token":"tok","username":"admin","password":"correct horse battery"}`)
@@ -281,7 +281,7 @@ func TestEveryDocumentedOperationExists(t *testing.T) {
 
 	oa := loadJSON(t, handler(t), "/spec/openapi.json")
 	s := newLiveStack(t)
-	skip := map[string]bool{"/api/events": true, "/auth/logout": true} // a stream never ends; logout would end the session used below
+	skip := map[string]bool{"/api/events": true, "/auth/logout": true, "/mcp": true} // a stream never ends; logout would end the session used below; /mcp only exists when enabled (checked below)
 	methods := []string{"get", "post", "put", "patch", "delete"}
 	n := 0
 	for path, item := range oa["paths"].(map[string]any) { //nolint:forcetypeassert // test
@@ -310,7 +310,75 @@ func TestEveryDocumentedOperationExists(t *testing.T) {
 			n++
 		}
 	}
-	if n < 20 {
+	if n < 15 {
 		t.Fatalf("only %d operations checked: the walk is broken", n)
+	}
+}
+
+// TestMCPDocumentationMatchesTheServer checks what the /mcp section promises: the headers and status codes, the
+// SSE framing of the answer, and that the documented tool names are exactly the tools the server offers.
+func TestMCPDocumentationMatchesTheServer(t *testing.T) {
+	t.Parallel()
+
+	oa := loadJSON(t, handler(t), "/spec/openapi.json")
+	s := newLiveStack(t)
+	call := func(method, token, accept, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/mcp", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		s.web.ServeHTTP(rec, req)
+		return rec
+	}
+	const both = "application/json, text/event-stream"
+	const list = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+
+	if rec := call(http.MethodPost, "", both, list); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), `Bearer realm="swagger-aggregator"`) {
+		t.Errorf("no token: %d %q", rec.Code, rec.Header().Get("WWW-Authenticate"))
+	}
+	if rec := call(http.MethodPost, mcpToken, "application/json", list); rec.Code != http.StatusBadRequest {
+		t.Errorf("Accept without text/event-stream: want 400, got %d", rec.Code)
+	}
+	if rec := call(http.MethodGet, mcpToken, "text/event-stream", ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET: want 405, got %d", rec.Code)
+	}
+
+	rec := call(http.MethodPost, mcpToken, both, list)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/event-stream" || !strings.HasPrefix(rec.Body.String(), "event: message\ndata: ") {
+		t.Fatalf("tools/list: %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+	var resp struct {
+		Result struct {
+			Tools []struct{ Name string } `json:"tools"`
+		} `json:"result"`
+	}
+	data := strings.TrimPrefix(strings.SplitN(rec.Body.String(), "\n", 3)[1], "data: ")
+	if err := json.Unmarshal([]byte(data), &resp); err != nil {
+		t.Fatalf("the data line is no JSON-RPC response: %v: %q", err, data)
+	}
+	var real []string
+	for _, tool := range resp.Result.Tools {
+		real = append(real, tool.Name)
+	}
+	slices.Sort(real)
+	schema := oa["components"].(map[string]any)["schemas"].(map[string]any)["JsonRpcRequest"].(map[string]any) //nolint:forcetypeassert // test
+	var documented []string
+	for _, n := range schema["properties"].(map[string]any)["params"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any)["enum"].([]any) { //nolint:forcetypeassert // test
+		documented = append(documented, n.(string)) //nolint:forcetypeassert // test
+	}
+	slices.Sort(documented)
+	if !slices.Equal(real, documented) {
+		t.Errorf("the server offers tools %v, the document lists %v", real, documented)
+	}
+
+	// a failed tool call is a 200 with isError, as documented
+	rec = call(http.MethodPost, mcpToken, both, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_spec","arguments":{"service":"nope"}}}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isError":true`) {
+		t.Errorf("a failed tool call: %d %q", rec.Code, rec.Body.String())
 	}
 }

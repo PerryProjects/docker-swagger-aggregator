@@ -8,8 +8,7 @@ info:
     Use this interface to build your own frontend: list the documented services, read their OpenAPI specs, follow
     status changes live and (optionally) manage users.
 
-    **Live updates** are a Server-Sent Events stream, described in the separate **AsyncAPI** document
-    (`/spec/asyncapi.json`, shown next to this one).
+    **Live updates** are a Server-Sent Events stream: see `GET /api/events`, which documents every event.
 
     **Authentication** depends on `SWAGGER_AGGREGATOR_WEB_AUTH`:
     - `none`: no authentication.
@@ -19,7 +18,7 @@ info:
     - `oidc`: the browser is redirected to the identity provider (`/auth/login` is then a redirect, `/auth/session` etc. do not exist).
 
     The `/auth/*` operations below are those of `build_in`. The read-only **MCP** server for AI assistants lives at `/mcp`
-    (Streamable HTTP, bearer token) and is not described here.
+    (JSON-RPC over Streamable HTTP, bearer token, only when enabled): see the **MCP** section.
   license:
     name: see the repository
     url: https://github.com/perryprojects/docker-swagger-aggregator
@@ -29,14 +28,18 @@ servers:
 tags:
   - name: Services
     description: The discovered services and their OpenAPI specs.
+  - name: Events
+    description: The live service list as Server-Sent Events.
   - name: Proxy
     description: Same-origin proxies used by "Try it".
+  - name: MCP
+    description: The read-only Model Context Protocol server for AI assistants (`SWAGGER_AGGREGATOR_WEB_MCP=true`).
   - name: Auth
     description: Sign in, sign out, first-run setup (auth=build_in).
   - name: Users
     description: User management (auth=build_in, admins only).
   - name: Meta
-    description: Health and the documents describing this API.
+    description: Health and the document describing this API.
 paths:
   /api/services:
     get:
@@ -90,23 +93,84 @@ paths:
               schema: {type: string, examples: ["unknown service", "spec not fetched yet"]}
   /api/events:
     get:
-      tags: [Services]
+      tags: [Events]
       operationId: streamEvents
       summary: Follow the service list live (Server-Sent Events)
       description: |
-        A long-lived `text/event-stream`. The full service list is sent on connect and again on every visible change; a
-        `: heartbeat` comment keeps idle proxies from closing the connection. See the **AsyncAPI** document for the
-        messages. Use `EventSource` (it reconnects by itself and sends the session cookie for the same origin).
+        A long-lived `text/event-stream` (the standard
+        [SSE format](https://html.spec.whatwg.org/multipage/server-sent-events.html)). It sends the **whole** service list
+        whenever it is worth showing, so a client simply replaces its list: there are no deltas to apply and nothing to
+        resume after a reconnect.
+
+        ## Events
+
+        | Event | `data` | When |
+        |---|---|---|
+        | `services` | a JSON array of [`Service`](#model/service): the complete list | once right after connecting, then after **every visible change**: a service appears or disappears, goes up or down, gets a new spec, changes its problem, group or order |
+        | *(none)* | the comment line `: heartbeat` | every 15 seconds, so idle proxies keep the connection open |
+
+        A comment line is not an event: `EventSource` ignores it, so the application never sees a heartbeat. A change that
+        only moves `lastSeen` is not a visible change and sends nothing.
+
+        ## On the wire
+
+        ```
+        event: services
+        data: [{"name":"orders","status":"up","lastSeen":"2026-10-24T17:40:04.489Z","specHash":"54efce3d897a6fb5"}]
+
+        : heartbeat
+
+        event: services
+        data: [{"name":"orders","status":"down","error":"unexpected status 503 Service Unavailable","specHash":"54efce3d897a6fb5"}]
+
+        ```
+
+        `data` is always one line of JSON. The response has `Cache-Control: no-cache` and `X-Accel-Buffering: no`
+        (so that nginx does not buffer the stream).
+
+        ## In the browser
+
+        ```js
+        const es = new EventSource('/api/events')   // reconnects by itself; sends the session cookie of the same origin
+        es.addEventListener('services', (e) => render(JSON.parse(e.data)))
+        ```
+
+        With authentication on, an unauthenticated request answers `401`, which makes `EventSource` stop for good (it
+        cannot read the status). A robust client therefore falls back to polling `GET /api/services` when the stream
+        fails: a `401` there means "sign in again". Which service changed is not announced; compare the new list with
+        the old one (the `specHash` tells whether a spec changed).
       security: [{}, {cookieAuth: []}]
       responses:
         "200":
-          description: The event stream.
+          description: The event stream. It stays open until either side closes it.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-cache}}
+            X-Accel-Buffering: {schema: {type: string, const: "no"}}
           content:
             text/event-stream:
               schema:
                 type: string
                 description: |
-                  `event: services` + `data: <JSON array of Service>` blocks. Documented as AsyncAPI channel `services`.
+                  Blocks of `event: services` + `data: <JSON array of Service>`, separated by an empty line, and
+                  `: heartbeat` comment lines.
+              examples:
+                afterConnecting:
+                  summary: The first message after connecting
+                  value: |+
+                    event: services
+                    data: [{"name":"Inventory","status":"up","lastSeen":"2026-10-24T17:40:04.484Z","specHash":"b795927e5b5fc9b8"},{"name":"orders","status":"up","lastSeen":"2026-10-24T17:40:04.489Z","specHash":"54efce3d897a6fb5"}]
+
+                heartbeat:
+                  summary: A heartbeat (a comment, not an event)
+                  value: |+
+                    : heartbeat
+
+                serviceWentDown:
+                  summary: A service went down
+                  value: |+
+                    event: services
+                    data: [{"name":"Inventory","status":"up","specHash":"b795927e5b5fc9b8"},{"name":"orders","status":"down","error":"unexpected status 503 Service Unavailable","specHash":"54efce3d897a6fb5"}]
+
         "401": {$ref: "#/components/responses/Unauthenticated"}
   /api/proxy/{id}/{path}:
     parameters:
@@ -222,6 +286,99 @@ paths:
         "400": {description: "`scalar_url` is not an http(s) URL."}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "404": {description: No registered service for this URL.}
+  /mcp:
+    post:
+      tags: [MCP]
+      operationId: mcpCall
+      summary: Call the MCP server (JSON-RPC 2.0)
+      description: |
+        A [Model Context Protocol](https://modelcontextprotocol.io) server over Streamable HTTP, **stateless** (no session,
+        no `initialize` needed). It is **read-only**: it lets an AI assistant discover the documented services and read
+        their specs, and it cannot call the services. Only present when the web server runs with
+        `SWAGGER_AGGREGATOR_WEB_MCP=true`; the session login does not apply, the **bearer token** does
+        (`SWAGGER_AGGREGATOR_WEB_MCP_TOKEN`, a shared secret: whoever has it can read all specs).
+
+        Send one JSON-RPC request per `POST` with `Content-Type: application/json` and
+        `Accept: application/json, text/event-stream` (without both, `400`). The answer is `text/event-stream` with one
+        `message` event whose `data` is the JSON-RPC response. `GET` and `DELETE` answer `405`.
+        Use the `tools/list` method to discover the tools and `tools/call` to run one.
+
+        ## Tools
+
+        | Tool | Arguments | Returns (`structuredContent`) |
+        |---|---|---|
+        | `list_services` | none | `{services: [{name, status, group?, hasSpec, problem?}]}`: start here |
+        | `list_endpoints` | `service` | `{endpoints: [{method, path, summary?, operationId?, tags?}]}`: cheaper than the whole spec |
+        | `search_endpoints` | `query`, `limit?` (default 25, at most 100) | `{matches: [{service, method, path, ...}], truncated?, unavailable?}`: case-insensitive, over name, path, summary, description, operationId and tags |
+        | `get_spec` | `service` | the complete spec as JSON **text** (it can be large) |
+
+        A failed tool call is not an HTTP error: the result has `isError: true` and a message in `content[0].text`
+        (for example `unknown service "x": call list_services for the names`).
+
+        ## Using it from an assistant
+
+        ```
+        claude mcp add --transport http swagger-aggregator https://docs.example.com/mcp \
+          --header "Authorization: Bearer <token>"
+        ```
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: Accept
+          in: header
+          required: true
+          description: Must list both media types.
+          schema: {type: string, const: "application/json, text/event-stream"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/JsonRpcRequest"}
+            examples:
+              listTools:
+                summary: Discover the tools
+                value: {jsonrpc: "2.0", id: 1, method: tools/list}
+              listServices:
+                summary: List the services
+                value: {jsonrpc: "2.0", id: 2, method: tools/call, params: {name: list_services, arguments: {}}}
+              listEndpoints:
+                summary: List the operations of one service
+                value: {jsonrpc: "2.0", id: 3, method: tools/call, params: {name: list_endpoints, arguments: {service: orders}}}
+              searchEndpoints:
+                summary: Search all services
+                value: {jsonrpc: "2.0", id: 4, method: tools/call, params: {name: search_endpoints, arguments: {query: invoice, limit: 10}}}
+              getSpec:
+                summary: Read a whole spec
+                value: {jsonrpc: "2.0", id: 5, method: tools/call, params: {name: get_spec, arguments: {service: orders}}}
+      responses:
+        "200":
+          description: One `message` event with the JSON-RPC response.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "`event: message`, then `data:` with a JSON-RPC response (see `JsonRpcResponse`)."
+              examples:
+                listServicesResult:
+                  summary: Result of list_services
+                  value: |+
+                    event: message
+                    data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"services\":[{\"hasSpec\":true,\"name\":\"orders\",\"status\":\"up\"}]}"}],"structuredContent":{"services":[{"hasSpec":true,"name":"orders","status":"up"}]}}}
+
+                toolError:
+                  summary: A failed tool call
+                  value: |+
+                    event: message
+                    data: {"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"unknown service \"nope\": call list_services for the names"}],"isError":true}}
+
+        "400":
+          description: Malformed request, or the `Accept` header lacks one of the two media types.
+          content: {text/plain: {schema: {type: string}}}
+        "401":
+          description: Missing or wrong bearer token.
+          headers:
+            WWW-Authenticate: {schema: {type: string, const: 'Bearer realm="swagger-aggregator"'}}
+          content: {text/plain: {schema: {type: string, const: unauthorized}}}
+        "405": {description: "Only `POST` is allowed (the server is stateless: no stream to open, no session to close)."}
   /healthz:
     get:
       tags: [Meta]
@@ -249,22 +406,6 @@ paths:
       security: []
       responses:
         "200": {description: This OpenAPI document., content: {application/yaml: {schema: {type: string}}}}
-  /spec/asyncapi.json:
-    get:
-      tags: [Meta]
-      operationId: getAsyncAPI
-      summary: The AsyncAPI document of the event stream (JSON)
-      security: []
-      responses:
-        "200": {description: The AsyncAPI 3.1 document., content: {application/json: {schema: {type: object}}}}
-  /spec/asyncapi.yaml:
-    get:
-      tags: [Meta]
-      operationId: getAsyncAPIYAML
-      summary: The AsyncAPI document of the event stream (YAML)
-      security: []
-      responses:
-        "200": {description: The AsyncAPI 3.1 document., content: {application/yaml: {schema: {type: string}}}}
   /auth/session:
     get:
       tags: [Auth]
@@ -459,7 +600,44 @@ components:
       in: cookie
       name: swagger_aggregator_session
       description: The session cookie set by `login` / `setup` (auth=build_in) or by the OpenID Connect login (auth=oidc).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The shared secret `SWAGGER_AGGREGATOR_WEB_MCP_TOKEN` (at least 32 characters). Only `/mcp` uses it.
   schemas:
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, id, method]
+      properties:
+        jsonrpc: {type: string, const: "2.0"}
+        id: {type: [integer, string], description: Echoed in the response.}
+        method:
+          type: string
+          enum: [tools/list, tools/call]
+          description: "`tools/list` discovers the tools, `tools/call` runs one."
+        params:
+          type: object
+          description: For `tools/call`.
+          required: [name]
+          properties:
+            name: {type: string, enum: [list_services, list_endpoints, search_endpoints, get_spec]}
+            arguments: {type: object, description: "The tool's arguments, see the table above."}
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc: {type: string, const: "2.0"}
+        id: {type: [integer, string]}
+        result:
+          type: object
+          properties:
+            content:
+              type: array
+              description: The result as text (JSON for the structured tools).
+              items: {type: object, properties: {type: {type: string, const: text}, text: {type: string}}}
+            structuredContent: {type: object, description: "The same result as an object, for the tools that have a schema."}
+            isError: {type: boolean, description: "true: the tool failed; `content[0].text` says why."}
+        error: {type: object, description: A JSON-RPC protocol error (unknown method, invalid arguments)., properties: {code: {type: integer}, message: {type: string}}}
     Service:
       type: object
       required: [name, status]

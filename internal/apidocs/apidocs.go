@@ -1,8 +1,8 @@
-// Package apidocs embeds and serves the documentation of this program's own HTTP interface: an OpenAPI 3.1
-// document for the REST endpoints and an AsyncAPI 3.0 document for the Server-Sent Events stream. A custom
-// frontend is built against them; the UI shows them with Scalar.
+// Package apidocs embeds and serves the documentation of this program's own HTTP interface as one OpenAPI 3.1
+// document: the REST endpoints, the Server-Sent Events stream (/api/events) and the MCP endpoint (/mcp). A
+// custom frontend is built against it; the UI shows it with Scalar.
 //
-// The documents are plain YAML files next to this file. Tests keep them in step with the code.
+// The document is a plain YAML file next to this file. Tests keep it in step with the code.
 package apidocs
 
 import (
@@ -14,13 +14,13 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-//go:embed openapi.yaml asyncapi.yaml
+//go:embed openapi.yaml
 var files embed.FS
 
-// Handler serves GET /spec/{openapi,asyncapi}.{json,yaml}. Mount it at "/spec/".
+// Handler serves GET /spec/openapi.json and /spec/openapi.yaml. Mount it at "/spec/".
 func Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
-	for _, name := range []string{"openapi", "asyncapi"} {
+	for _, name := range []string{"openapi"} {
 		raw, err := files.ReadFile(name + ".yaml")
 		if err != nil {
 			return nil, err

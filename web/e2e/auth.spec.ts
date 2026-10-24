@@ -149,7 +149,7 @@ test('changing the own password keeps this browser signed in and works for the n
   await expect(page.getByTestId('current-user')).toHaveText('admin')
 })
 
-test('the navigation reaches every page, and the API page documents REST (OpenAPI) and events (AsyncAPI)', async ({ page }) => {
+test('the navigation reaches every page and the API page documents REST, the event stream and MCP', async ({ page }) => {
   await signIn(page, ADMIN.name, 'a brand new password')
   const nav = page.getByRole('navigation', { name: 'Main' })
   await expect(nav.getByRole('link', { name: 'Users' })).toBeVisible()
@@ -157,19 +157,14 @@ test('the navigation reaches every page, and the API page documents REST (OpenAP
   await nav.getByRole('link', { name: 'API' }).click()
   await expect(page).toHaveURL(/\/api-docs(#.*)?$/)
   await expect(page.getByRole('heading', { name: 'Swagger Aggregator HTTP API' })).toBeVisible()
-  await expect(page.getByText('Follow the service list live').first()).toBeVisible() // the OpenAPI side
+  const sidebar = page.getByRole('complementary')
+  await expect(sidebar.getByText('Events', { exact: true })).toBeVisible() // the SSE events
+  await expect(sidebar.getByText('MCP', { exact: true })).toBeVisible()
 
-  await page.getByText('REST API (OpenAPI)').first().click() // the document switcher
-  await page.getByText('Events (AsyncAPI)').first().click()
-  await expect(page.getByRole('heading', { name: 'Swagger Aggregator events' })).toBeVisible()
-  await expect(page.getByText('Service list').first()).toBeVisible() // the AsyncAPI channel
-
-  // the raw documents are public and valid JSON, so a custom frontend can fetch them
-  for (const name of ['openapi', 'asyncapi']) {
-    const res = await page.request.get(`/spec/${name}.json`)
-    expect(res.status()).toBe(200)
-    expect(Object.keys(await res.json())).toContain(name)
-  }
+  // the raw document is public and valid JSON, so a custom frontend can fetch it; AsyncAPI is gone
+  const res = await page.request.get('/spec/openapi.json')
+  expect(res.status()).toBe(200)
+  expect((await res.json()).openapi).toBe('3.1.0')
 
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Status' }).click()
   await expect(page.getByTestId('current-user')).toHaveText('admin') // the PrimeVue menubar of the status page
