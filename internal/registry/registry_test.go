@@ -314,3 +314,36 @@ func TestSameNameWithoutMatchingReplicaKeyStaysSeparate(t *testing.T) {
 		t.Fatalf("unrelated services with one name must not merge: %+v", l)
 	}
 }
+
+// Several API instances watch the same workloads but see the replicas in different orders. They must pick the
+// same replica to document the service, or their spec hashes (which contain the proxy path) would differ.
+func TestRepresentativeReplicaDoesNotDependOnArrivalOrder(t *testing.T) {
+	t.Parallel()
+
+	build := func(order ...string) registry.Service {
+		r := registry.New(registry.Config{})
+		for _, id := range order {
+			r.UpsertReplica("api", id, "proj/api", true, "")
+			r.SetSpec(id, []byte(`{"id":"`+id+`"}`)) // each replica's spec names its own proxy path
+		}
+		return get(t, r)
+	}
+	a, b := build("c1", "c2", "c3"), build("c3", "c1", "c2")
+	if a.SpecHash != b.SpecHash {
+		t.Fatalf("instances disagree on the spec: %s vs %s", a.SpecHash, b.SpecHash)
+	}
+	r := registry.New(registry.Config{})
+	for _, id := range []string{"c2", "c1"} {
+		r.UpsertReplica("api", id, "proj/api", true, "")
+		r.SetSpec(id, []byte(`{"id":"`+id+`"}`))
+	}
+	spec, _, _ := r.Spec("api")
+	if string(spec) != `{"id":"c1"}` {
+		t.Fatalf("the lowest ID documents the service, got %s", spec)
+	}
+	r.UpsertReplica("api", "c1", "proj/api", false, "") // it stops: the other one takes over
+	spec, _, _ = r.Spec("api")
+	if string(spec) != `{"id":"c2"}` {
+		t.Fatalf("a replica that is up must take over, got %s", spec)
+	}
+}

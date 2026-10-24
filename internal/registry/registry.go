@@ -291,30 +291,46 @@ func (r *Registry) Spec(name string) ([]byte, string, bool) {
 	return rep.spec, rep.svc.SpecHash, true
 }
 
-// representative is the replica a service is shown (and documented) by: the first one that is up and
-// has a spec, else the first one up, else the one seen last. Callers hold r.mu.
+// representative is the replica a service is shown (and documented) by: one that is up and has a spec, else one
+// that is up, else one with a spec. Ties are broken by a fixed order (the lowest ID), not by arrival order: several
+// API instances watch the same workloads, see them in different orders and must still agree, or the spec hash
+// (which contains the replica's proxy path) would differ between them. Callers hold r.mu.
 func (r *Registry) representative(group []*entry) *entry {
 	best := group[0]
-	rank := func(e *entry) int {
-		switch {
-		case e.svc.Status == status.Up && e.spec != nil:
-			return 3
-		case e.svc.Status == status.Up:
-			return 2
-		case e.spec != nil:
-			return 1
-		}
-		return 0
-	}
 	for _, e := range group[1:] {
-		switch {
-		case rank(e) > rank(best):
+		if better(e, best) {
 			best = e
-		case rank(e) == rank(best) && rank(e) < 2 && seenAfter(e, best):
-			best = e // among down replicas show the most recently seen one
 		}
 	}
 	return best
+}
+
+func rank(e *entry) int {
+	switch {
+	case e.svc.Status == status.Up && e.spec != nil:
+		return 3
+	case e.svc.Status == status.Up:
+		return 2
+	case e.spec != nil:
+		return 1
+	}
+	return 0
+}
+
+// better orders replicas: higher rank first; among down replicas the one seen last; then the lowest ID.
+func better(a, b *entry) bool {
+	if ra, rb := rank(a), rank(b); ra != rb {
+		return ra > rb
+	}
+	if rank(a) < 2 {
+		if seenAfter(a, b) {
+			return true
+		}
+		if seenAfter(b, a) {
+			return false
+		}
+	}
+	return a.id < b.id
 }
 
 func seenAfter(a, b *entry) bool {
