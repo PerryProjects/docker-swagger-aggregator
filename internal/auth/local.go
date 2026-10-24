@@ -620,6 +620,9 @@ func (l *Local) storeError(w http.ResponseWriter, err error) bool {
 }
 
 func (l *Local) fail(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		return // the browser gave up (navigated away): nobody is waiting for an answer, and it is no error
+	}
 	l.log.Error("auth request failed", zap.Error(err))
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 }
