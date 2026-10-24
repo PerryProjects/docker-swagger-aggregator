@@ -447,3 +447,42 @@ func TestWebBasePathIsStrippedWhenPresent(t *testing.T) {
 		t.Errorf("ProxyPath = %q", got)
 	}
 }
+
+func TestWebProtectCoversUIAPIAndProxiesButNotHealthz(t *testing.T) {
+	t.Parallel()
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("API")) }))
+	defer api.Close()
+	apiURL, _ := url.Parse(api.URL)
+	ui := fstest.MapFS{"index.html": {Data: []byte("INDEX")}}
+	deny := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/healthz" && r.Header.Get("X-Test-Session") == "" {
+				http.Error(w, "login", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	h := server.NewWebHandler(server.WebConfig{UI: ui, API: apiURL, BasePath: "/docs", Protect: deny})
+	status := func(path string, session bool) (int, string) {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if session {
+			req.Header.Set("X-Test-Session", "1")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	for _, p := range []string{"/docs/", "/docs/status", "/docs/api/services", "/docs/api/events", "/docs/api/proxy/c1/x", "/api/services"} {
+		if code, _ := status(p, false); code != http.StatusUnauthorized {
+			t.Errorf("%s without a session: want 401, got %d", p, code)
+		}
+	}
+	if code, body := status("/docs/healthz", false); code != http.StatusOK || !strings.Contains(body, "ok") {
+		t.Errorf("/healthz must stay open: %d %q", code, body)
+	}
+	if code, body := status("/docs/api/services", true); code != http.StatusOK || body != "API" {
+		t.Errorf("with a session the API is reachable: %d %q", code, body)
+	}
+}

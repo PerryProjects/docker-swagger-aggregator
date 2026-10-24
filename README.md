@@ -290,10 +290,56 @@ remount keeps the open document, stale hash cleanup, group/order, hide-offline, 
 Note: `vue-tsc` (typecheck) needs Node; the Docker image has none, so it builds with `bun run bundle`.
 
 `swagger-aggregator-web` flags/env: `--listen`/`SWAGGER_AGGREGATOR_WEB_LISTEN` (`:3000`), `--dir`/`SWAGGER_AGGREGATOR_WEB_DIR` (`web/dist`),
-`--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`), `--base-path`/`SWAGGER_AGGREGATOR_WEB_BASE_PATH` (none; e.g. `/docs`,
+`--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`), the `--auth`/`--oidc-*`/`--session-*` options ([Authentication](#authentication)), `--base-path`/`SWAGGER_AGGREGATOR_WEB_BASE_PATH` (none; e.g. `/docs`,
 stripped when present, so it works with or without a `StripPrefix` in front; set the same value on the API).
 
+## Authentication
+
+Off by default (`SWAGGER_AGGREGATOR_WEB_AUTH=none`). With `oidc`, `swagger-aggregator-web` requires a login at any OpenID Connect provider
+([Authelia](https://www.authelia.com), Keycloak, Authentik, Dex, Entra ID, Google, ...) for **everything** it serves: the UI, `/api/*`
+(including the event stream) and the Try-it proxies. The API container stays internal and needs no auth of its own, because it is not
+published. Browser navigations are redirected to the provider; API calls without a session get `401` (the UI then reloads and signs in again).
+`/healthz` stays open for probes.
+
+| Variable (flag `--x-y`) | Default | Meaning |
+|---|---|---|
+| `SWAGGER_AGGREGATOR_WEB_AUTH` | `none` | `none` or `oidc` |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_ISSUER` | – | issuer URL of the provider (its `/.well-known/openid-configuration` is used) |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_CLIENT_ID` / `..._CLIENT_SECRET` | – | the client registered for this app |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_REDIRECT_URL` | – | public callback URL, `<public url><base path>/auth/callback`, registered at the provider |
+| `SWAGGER_AGGREGATOR_WEB_SESSION_SECRET` | – | signs and encrypts the cookies, at least 32 characters (`openssl rand -base64 48`) |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_ALLOWED_GROUPS` | – | comma separated; only members may sign in |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_ALLOWED_EMAILS` | – | comma separated; alternative to groups (the provider must report the address as verified) |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_GROUPS_CLAIM` | `groups` | claim with the user's groups (also read from userinfo if the ID token lacks it) |
+| `SWAGGER_AGGREGATOR_WEB_OIDC_SCOPES` | `openid,profile,email,groups` | requested scopes |
+| `SWAGGER_AGGREGATOR_WEB_SESSION_TTL` | `8h` | login lifetime |
+
+Without allowed groups/emails every user the provider authenticates may sign in. Pass secrets as environment variables (a Kubernetes
+`Secret`, a compose `env_file`), not as flags. Details: authorization code flow with PKCE, `state` and `nonce`, `HttpOnly` + `SameSite=Lax`
+cookies (`Secure` when the redirect URL is `https`), local-only return paths. `GET /auth/logout` ends the local session only; the provider's
+own session may sign you straight back in. The provider may start later than this server: login answers `503` until it is reachable.
+
+Authelia (OIDC client, adapt to your Authelia version; the secret is stored hashed there):
+
+```yaml
+identity_providers:
+  oidc:
+    clients:
+      - client_id: swagger-aggregator
+        client_name: Swagger Aggregator
+        client_secret: '$pbkdf2-sha512$...'   # authelia crypto hash generate pbkdf2 --password '<secret>'
+        public: false
+        authorization_policy: two_factor
+        redirect_uris: [https://docs.example.com/auth/callback]
+        scopes: [openid, profile, email, groups]
+```
+
+Verified end to end with Dex and a real browser (login, requested page restored, UI + event stream, logout); the flow itself is covered by
+unit tests against a fake provider. **Not tested against Authelia itself.** As an alternative without any code in this app you can
+keep `auth=none` and let Traefik (or nginx) ask Authelia through a `forwardAuth` middleware on the router of `swagger-aggregator-web`.
+
 ## Security
+
 
 - **Do not mount `/var/run/docker.sock` into the app.** The compose file puts a
   `docker-socket-proxy` in front (`CONTAINERS=1`, `EVENTS=1`; `POST` stays off, so it is read-only)
@@ -302,7 +348,7 @@ stripped when present, so it works with or without a `StripPrefix` in front; set
   every labeled container (needed for health, network, ports) and only keeps labels/state/IP, but the
   proxy still lets *the app* read the full inspect output, and `CONTAINERS=1` covers all containers, not just labeled ones.
   Anyone who can compromise the app can read those. Keep the app patched and don't expose the proxy.
-- The app has **no authentication**. Route only `swagger-aggregator-web` through your reverse proxy and do not publish the API port (see
+- Authentication is **off by default**; see [Authentication](#authentication). Route only `swagger-aggregator-web` through your reverse proxy and do not publish the API port (see
   [Traefik](#traefik)). The spec endpoint serves whatever the documented services publish, and the Try-it proxies let
   any UI user send requests to every registered container, so treat the UI as sensitive as those services.
 - Hardening in compose: the two Go containers run non-root, `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, with memory/pid

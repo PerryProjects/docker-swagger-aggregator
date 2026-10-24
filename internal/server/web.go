@@ -20,6 +20,9 @@ type WebConfig struct {
 	// BasePath is the public prefix the UI is served under ("" or "/docs"). It is stripped
 	// when present, so it works whether or not the reverse proxy in front strips it.
 	BasePath string
+	// Protect wraps everything the server answers (UI, /api, the proxies, SSE), e.g. with a login.
+	// It sees paths without the BasePath. nil: no protection.
+	Protect func(http.Handler) http.Handler
 }
 
 // NewWebHandler serves the built UI and forwards /api/ to the API, so the
@@ -34,7 +37,11 @@ func NewWebHandler(cfg WebConfig) http.Handler {
 		BufferPool:    newBufferPool(),
 	})
 	mux.Handle("/", spa(cfg.UI))
-	return securityHeaders(stripBasePath(cfg.BasePath, mux))
+	var h http.Handler = mux
+	if cfg.Protect != nil {
+		h = cfg.Protect(h)
+	}
+	return securityHeaders(stripBasePath(cfg.BasePath, h))
 }
 
 // stripBasePath removes the public prefix from the request path (a no-op for "").

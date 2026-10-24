@@ -41,6 +41,7 @@ export function useServices() {
     try {
       const res = await fetch(`${BASE}api/services`)
       if (res.ok) apply(await res.json())
+      else if (res.status === 401) location.reload() // session expired: the navigation sends us to the login
     } catch { /* backend unreachable; try again next tick */ }
   }
 
@@ -50,6 +51,7 @@ export function useServices() {
     es.addEventListener('services', (e) => apply(JSON.parse((e as MessageEvent).data)))
     es.onerror = () => {
       live.value = false
+      poll() // finds out quickly whether the stream died because the session expired (401)
       // CONNECTING = the browser retries by itself. CLOSED = it gave up (e.g. HTTP error).
       if (es?.readyState === EventSource.CLOSED) {
         es.close()
