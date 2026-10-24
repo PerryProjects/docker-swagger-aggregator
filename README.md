@@ -136,7 +136,7 @@ known spec.
 
 `/status` lists **every** discovered service (also those that never delivered a spec, which are not in the docs):
 up/down as text and marker, last successful fetch, the current problem (fetch error, wrong network, invalid labels, ...) and
-an "Open docs" link. It updates live over the same SSE stream. The docs sidebar links to it.
+an "Open docs" link. It updates live over the same SSE stream. The docs sidebar links to it. It is a PrimeVue page (light/dark follows the OS).
 
 ## HTTP API
 
@@ -285,7 +285,7 @@ cd web && bunx playwright install chromium && bun run test:e2e
 #   or with the locally installed Chrome: PW_CHANNEL=chrome bun run test:e2e
 ```
 
-The Playwright suite pins the Scalar behaviours listed below (no external requests, status flips keep position,
+The Playwright suite also runs the real Go web server with `auth=build_in` against the built UI (`e2e/auth.spec.ts`: setup, login, users); it builds the binary itself, so Go must be installed (or set `E2E_WEB_BIN` to a prebuilt one). It pins the Scalar behaviours listed below (no external requests, status flips keep position,
 remount keeps the open document, stale hash cleanup, group/order, hide-offline, Try-it through the proxy).
 Note: `vue-tsc` (typecheck) needs Node; the Docker image has none, so it builds with `bun run bundle`.
 
@@ -303,15 +303,23 @@ their commands locally, not on a runner. Pin the lint version and the base image
 
 ## Authentication
 
-Off by default (`SWAGGER_AGGREGATOR_WEB_AUTH=none`). With `oidc`, `swagger-aggregator-web` requires a login at any OpenID Connect provider
-([Authelia](https://www.authelia.com), Keycloak, Authentik, Dex, Entra ID, Google, ...) for **everything** it serves: the UI, `/api/*`
-(including the event stream) and the Try-it proxies. The API container stays internal and needs no auth of its own, because it is not
-published. Browser navigations are redirected to the provider; API calls without a session get `401` (the UI then reloads and signs in again).
-`/healthz` stays open for probes.
+Off by default (`SWAGGER_AGGREGATOR_WEB_AUTH=none`). `swagger-aggregator-web` can protect **everything** it serves, the UI, `/api/*`
+(including the event stream) and the Try-it proxies, in one of two ways. The API container stays internal and needs no auth of its own,
+because it is not published. API calls without a session get `401` (the UI then reloads and shows the login). `/healthz` stays open for probes.
+
+| `SWAGGER_AGGREGATOR_WEB_AUTH` | What |
+|---|---|
+| `none` (default) | no login |
+| `build_in` | own login form and users stored in SQLite, with a user management page; see [Built-in users](#built-in-users) |
+| `oidc` | login at an OpenID Connect provider ([Authelia](https://www.authelia.com), Keycloak, Authentik, Dex, Entra ID, ...); see below |
+
+### OpenID Connect
+
+`auth=oidc`: browser navigations are redirected to the provider.
 
 | Variable (flag `--x-y`) | Default | Meaning |
 |---|---|---|
-| `SWAGGER_AGGREGATOR_WEB_AUTH` | `none` | `none` or `oidc` |
+| `SWAGGER_AGGREGATOR_WEB_AUTH` | `none` | `oidc` for this table |
 | `SWAGGER_AGGREGATOR_WEB_OIDC_ISSUER` | – | issuer URL of the provider (its `/.well-known/openid-configuration` is used) |
 | `SWAGGER_AGGREGATOR_WEB_OIDC_CLIENT_ID` / `..._CLIENT_SECRET` | – | the client registered for this app |
 | `SWAGGER_AGGREGATOR_WEB_OIDC_REDIRECT_URL` | – | public callback URL, `<public url><base path>/auth/callback`, registered at the provider |
@@ -346,6 +354,63 @@ Verified end to end with Dex and a real browser (login, requested page restored,
 unit tests against a fake provider. **Not tested against Authelia itself.** As an alternative without any code in this app you can
 keep `auth=none` and let Traefik (or nginx) ask Authelia through a `forwardAuth` middleware on the router of `swagger-aggregator-web`.
 
+### Built-in users
+
+`auth=build_in`: the web server shows its own login form (PrimeVue + Tailwind, Vue) and keeps the users in a SQLite database
+(GORM, `github.com/ncruces/go-sqlite3`: **no CGO**) in `SWAGGER_AGGREGATOR_WEB_DATA_DIR` (`/data` in the image and in compose, `data` otherwise).
+The schema is created by Atlas migrations that are embedded in the binary and applied at startup.
+
+- **First start without users:** every page shows a *setup* form. It needs the **setup token** that is printed in the log at startup
+  (`docker compose logs web`) or set with `SWAGGER_AGGREGATOR_WEB_SETUP_TOKEN`; without the token nobody can claim a freshly
+  started, reachable instance. Wrong tokens are throttled. The first account is an admin.
+- **Or from the environment:** `SWAGGER_AGGREGATOR_WEB_ADMIN_USER` + `SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD` (or `..._ADMIN_PASSWORD_HASH`,
+  a bcrypt hash) create the admin on the first start instead of the setup page. The environment **never overwrites** an existing account.
+- **Users page** (admins, `/users`): create users, set a new password, change the role, disable, delete. Roles: `admin` (manages users)
+  and `user` (reads the docs). The last active admin cannot be demoted, disabled or deleted, nobody can delete themselves. Every user can
+  change their own password in the account menu.
+- **Sessions:** an encrypted, signed `HttpOnly` + `SameSite=Lax` cookie (`Secure` behind HTTPS). A password change, disabling or deleting a
+  user ends their sessions at once. The cookie secret is `SWAGGER_AGGREGATOR_WEB_SESSION_SECRET`, or, if unset, a key file `session.key`
+  in the data dir (so logins survive restarts).
+- **Passwords:** bcrypt, 10-72 characters. Failed logins are delayed per username (1 s, 2 s, ... up to 30 s; a delay, not a lock-out, so
+  nobody can keep a user out). Unknown users cost the same time as wrong passwords. State-changing requests must be JSON.
+- **Keep the data:** mount a volume on the data dir (compose: the named volume `web-data`, already there; Kubernetes: replace the `emptyDir`
+  by a PersistentVolumeClaim). Without it the users are gone when the container is re-created and the setup form opens again.
+- **Limits:** one instance only (SQLite file; the deployment has one replica anyway), no two-factor login, no self-service password reset
+  (an admin sets a new one). If the last admin password is lost, stop the server and delete `swagger-aggregator.db` in the data dir (this
+  removes all users), then start again to register a new admin.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SWAGGER_AGGREGATOR_WEB_AUTH` | `none` | `none`, `build_in` or `oidc` |
+| `SWAGGER_AGGREGATOR_WEB_DATA_DIR` | `data` (`/data` in the image) | database and `session.key` |
+| `SWAGGER_AGGREGATOR_WEB_ADMIN_USER` / `..._ADMIN_PASSWORD` / `..._ADMIN_PASSWORD_HASH` | – | first admin from the environment |
+| `SWAGGER_AGGREGATOR_WEB_SETUP_TOKEN` | random, logged | token for the setup form |
+| `SWAGGER_AGGREGATOR_WEB_SESSION_SECRET` | key file in the data dir | at least 32 characters |
+| `SWAGGER_AGGREGATOR_WEB_SESSION_TTL` | `8h` | login lifetime |
+
+Schema changes: edit the models in `internal/store/schema`, then `atlas migrate diff <name> --env gorm` (see `atlas.hcl`; needs the
+[Atlas CLI](https://atlasgo.io), which the app itself does not). The first migration was generated by `tools/migrate-gen`, a separate Go
+module so that the application does not depend on the GORM provider's MySQL/Postgres drivers. The Atlas CLI step itself is untested here.
+
+## MCP (AI assistants)
+
+`SWAGGER_AGGREGATOR_WEB_MCP=true` serves a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` (Streamable HTTP,
+stateless, the official Go SDK). It is **read-only**: it cannot call the documented services and has no Try-it. Tools:
+
+| Tool | Does |
+|---|---|
+| `list_services` | the services with status, group, whether a spec exists and the last problem |
+| `list_endpoints` | method, path, summary, operationId, tags of one service |
+| `search_endpoints` | search all services by a word in name, path, summary, description, operationId or tags |
+| `get_spec` | the complete spec of one service as JSON (can be large) |
+
+Clients send `Authorization: Bearer <token>`; the token is `SWAGGER_AGGREGATOR_WEB_MCP_TOKEN` (at least 32 characters, e.g.
+`openssl rand -base64 32`) and is **required**. `/mcp` sits outside the session login on purpose (assistants cannot do a browser login),
+so treat the token like a password: whoever has it can read all specs. It is one shared token (no per-user tokens, no rate limit; put
+that in the reverse proxy). Specs can be sensitive: they go to whatever model the client uses. Example client entry (Claude Code):
+`claude mcp add --transport http swagger-aggregator https://docs.example.com/mcp --header "Authorization: Bearer <token>"`
+(untested here; the server was tested with the Go SDK client and with curl).
+
 ## Security
 
 
@@ -364,6 +429,15 @@ keep `auth=none` and let Traefik (or nginx) ask Authelia through a `forwardAuth`
   immutable. No CSP yet (Scalar's inline styles/workers need testing). The socket proxy only gets `no-new-privileges`
   (more would need testing against its HAProxy). Pin its image by digest in production.
 - Unauthenticated SSE clients each hold a connection; rate limiting belongs in the proxy.
+
+## UI stack and licences
+
+The documentation is [Scalar](https://github.com/scalar/scalar). The login, setup, status and users pages are Vue + **PrimeVue 4.5.5**
++ Tailwind CSS 4 (`web/src/shell`, `web/src/views`); Tailwind and PrimeVue are loaded only for those pages, so Scalar keeps its own styles (an
+e2e test checks that). **PrimeVue is pinned to 4.x on purpose:** 4.x (MIT) is at its last release (4.5.5, April 2026), while PrimeVue
+**5.x is under the PrimeUI licence**: it needs a licence key, is free only below revenue/developer/employee limits with a yearly
+confirmation, and is shipped compiled. That does not fit a repository others clone and build. Moving to 5.x, or to a different
+component library, is a decision to make once 4.x stops getting fixes.
 
 ## Frontend behaviour (verified against `@scalar/api-reference` 1.76.0)
 
@@ -440,6 +514,8 @@ A k3d cluster, by contrast, shows its nodes as ordinary containers in `docker ps
 
 ## Known limitations
 
+- PrimeVue is on the last 4.x release (MIT); 4.x will not get further fixes. See [UI stack and licences](#ui-stack-and-licences).
+- The built-in authentication is single-node SQLite without two-factor login or self-service password reset; the MCP token is one shared secret. See [Authentication](#authentication) and [MCP](#mcp-ai-assistants).
 - `moby/moby/client` is **v0.x** (v0.6.2 is the latest release, checked 2026-10-24); its API may still change between releases. Pinned in `go.mod`.
 - Compose replicas (`scale`) are one service: it is up while any replica is up and is documented by one healthy replica (the spec's "Try it" path points at that replica, and moves with it). Replicas are recognised by the compose project + service labels; unrelated containers that merely share a name get a `-<id>` suffix, which is only stable while the container runs.
 - `servers` (also on path items and operations) and top-level `host`+`basePath`+`schemes` are rewritten; callback/webhook `servers` are left alone.

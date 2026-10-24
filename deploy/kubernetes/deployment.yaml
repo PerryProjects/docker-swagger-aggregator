@@ -48,6 +48,10 @@ spec:
             # PersistentVolumeClaim, or they are gone when the pod is re-created (and the setup page opens again).
             # - {name: SWAGGER_AGGREGATOR_WEB_AUTH, value: build_in}
             # - {name: SWAGGER_AGGREGATOR_WEB_DATA_DIR, value: /data}
+            # Read-only MCP server at /mcp (README, "MCP"); the token belongs into a Secret:
+            # - {name: SWAGGER_AGGREGATOR_WEB_MCP, value: "true"}
+            # - name: SWAGGER_AGGREGATOR_WEB_MCP_TOKEN
+            #   valueFrom: {secretKeyRef: {name: swagger-aggregator-mcp, key: token}}
             # Optional login (see README, "Authentication"); put the secrets into a Secret, not into this file:
             # - {name: SWAGGER_AGGREGATOR_WEB_AUTH, value: oidc}
             # - {name: SWAGGER_AGGREGATOR_WEB_OIDC_ISSUER, value: "https://auth.example.com"}

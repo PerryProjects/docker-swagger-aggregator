@@ -55,6 +55,9 @@ services:
       SWAGGER_AGGREGATOR_WEB_DATA_DIR: /data
       SWAGGER_AGGREGATOR_WEB_ADMIN_USER: ${SWAGGER_AGGREGATOR_WEB_ADMIN_USER:-}
       SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD: ${SWAGGER_AGGREGATOR_WEB_ADMIN_PASSWORD:-}
+      # Read-only MCP server for AI assistants at /mcp; needs a token of at least 32 characters (README, "MCP").
+      SWAGGER_AGGREGATOR_WEB_MCP: ${SWAGGER_AGGREGATOR_WEB_MCP:-false}
+      SWAGGER_AGGREGATOR_WEB_MCP_TOKEN: ${SWAGGER_AGGREGATOR_WEB_MCP_TOKEN:-}
     volumes:
       - web-data:/data # users of auth=build_in; the root file system stays read-only
     depends_on:
