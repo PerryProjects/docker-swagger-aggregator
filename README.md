@@ -20,7 +20,7 @@ cmd/swagger-aggregator-web   static UI server + /api forwarder
 internal/app                 composition root: builds and wires everything, owns lifecycle (the only place that knows concrete types)
 internal/discovery           source-agnostic core: Container model, Source/Handler contracts, Manager (fetch/probe loop), target parsing
 internal/discovery/docker    Docker source (depends on a small docker.API interface, not on the client type)
-internal/discovery/kubernetes Kubernetes source: informers for Services, EndpointSlices, Ingress, IngressRoute + a level-triggered reconcile
+internal/discovery/kubernetes Kubernetes source: informers for Services, EndpointSlices, Ingress, IngressRoute, HTTPRoute, Gateway + a level-triggered reconcile
 internal/transport           Mux: routes requests by host (authenticated transport for the Kubernetes API server proxy only)
 internal/registry            in-memory state: services, name index, routes, change notification (versioned)
 internal/fetcher             bounded spec download + validation/normalisation (Prepare)
@@ -221,9 +221,10 @@ within seconds. A Service without a spec stays visible on the status page with t
 
 **Public URL.** With `--derive-server-url`, a missing `server-url` is derived from the objects that route to the Service, if exactly one URL results:
 a standard `Ingress` rule (host + root path; `https` if `spec.tls` covers the host) or a Traefik `IngressRoute` (route `Host(\`x\`)` exactly,
-`https` if `spec.tls` is set; `traefik.io/v1alpha1`, Traefik v3). `PathPrefix` rules, wildcard hosts and several different hosts are skipped
-(a path prefix needs to know whether the controller strips it), and an explicit annotation always wins. The IngressRoute CRD is optional:
-without it that part is ignored and picked up when the CRD appears.
+`https` if `spec.tls` is set; `traefik.io/v1alpha1`, Traefik v3) or a Gateway API `HTTPRoute` (`gateway.networking.k8s.io/v1`: explicit `hostnames`, a rule
+that matches the whole host, plain Service `backendRefs`; `https` if a parent Gateway listener for the host uses protocol `HTTPS`). `PathPrefix` rules, wildcard hosts and several different hosts are skipped
+(a path prefix needs to know whether the controller strips it), and an explicit annotation always wins. The IngressRoute and Gateway API CRDs are optional:
+without them that part is ignored and picked up when the CRD appears.
 
 **Inside the cluster** (`--kube-access=service`, the default when a ServiceAccount is present): Services are reached by their DNS name.
 
@@ -236,7 +237,7 @@ kubectl apply -f demo/kubernetes-paths.yaml                    # optional: PathP
 
 `deploy/kubernetes/deployment.yaml` runs both programs in one pod (they talk over localhost), non-root, read-only filesystem, all capabilities
 dropped, no Docker socket (`--docker=false`). The image is `swagger-aggregator:local`; build and push your own and change the tag.
-`rbac.yaml` is cluster-wide read access to services, endpointslices, ingresses and ingressroutes; for fewer namespaces use a `Role` per namespace
+`rbac.yaml` is cluster-wide read access to services, endpointslices, ingresses, ingressroutes, httproutes and gateways; for fewer namespaces use a `Role` per namespace
 and pass `--namespace`. If RBAC is incomplete the source logs a warning after 30 s and continues with what it can read (no derived URLs).
 
 **Outside the cluster** (`--kube-access=apiserver`, the default without a ServiceAccount): pod and service IPs are usually not routable, so the

@@ -85,7 +85,7 @@ type Config struct {
 	SyncTimeout time.Duration
 }
 
-// Source watches Services, EndpointSlices, Ingresses and IngressRoutes.
+// Source watches Services, EndpointSlices, Ingresses, IngressRoutes and Gateway API HTTPRoutes.
 type Source struct {
 	cl  Clients
 	cfg Config
@@ -142,7 +142,14 @@ func (s *Source) Run(ctx context.Context, h discovery.Handler) {
 		return
 	}
 	if s.cl.Dynamic != nil {
-		go s.watchIngressRoutes(ctx, events)
+		go s.watchCRD(ctx, ingressRouteGVR(), "Traefik IngressRoute", events,
+			func(c *caches, l []cache.GenericLister) { c.routes = append(c.routes, l...) })
+		if s.cfg.DeriveServerURL { // Gateway API: only needed to derive URLs
+			go s.watchCRD(ctx, gatewayGVR(), "Gateway API Gateway", events,
+				func(c *caches, l []cache.GenericLister) { c.gateways = append(c.gateways, l...) })
+			go s.watchCRD(ctx, httpRouteGVR(), "Gateway API HTTPRoute", events,
+				func(c *caches, l []cache.GenericLister) { c.httpRoutes = append(c.httpRoutes, l...) })
+		}
 	}
 
 	var applied map[string]discovery.Container
@@ -180,12 +187,15 @@ func (s *Source) Run(ctx context.Context, h discovery.Handler) {
 	}
 }
 
-// caches holds the listers; the IngressRoute ones appear once the CRD exists.
+// caches holds the listers; the CRD-based ones appear once the CRD exists.
 type caches struct {
 	services  []serviceLister
 	slices    []sliceLister
 	ingresses []ingressLister
 	routes    []cache.GenericLister
+	// Gateway API (optional CRDs): HTTPRoutes name the hosts, Gateways tell whether a listener is TLS.
+	httpRoutes []cache.GenericLister
+	gateways   []cache.GenericLister
 }
 
 type (

@@ -99,7 +99,7 @@ func (d crdDiscovery) ServerResourcesForGroupVersionWithContext(
 	_ context.Context,
 	gv string,
 ) (*metav1.APIResourceList, error) {
-	if gv == "traefik.io/v1alpha1" && d.present.Load() {
+	if (gv == "traefik.io/v1alpha1" || gv == "gateway.networking.k8s.io/v1") && d.present.Load() {
 		return &metav1.APIResourceList{GroupVersion: gv}, nil
 	}
 	return nil, apierrors.NewNotFound(schema.GroupResource{Group: "traefik.io", Resource: "ingressroutes"}, gv)
@@ -119,7 +119,9 @@ func start(t *testing.T, cfg kubernetes.Config, withIngressRouteCRD bool, objs .
 	core := fake.NewClientset(objs...)
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
-		{Group: "traefik.io", Version: "v1alpha1", Resource: "ingressroutes"}: "IngressRouteList",
+		{Group: "traefik.io", Version: "v1alpha1", Resource: "ingressroutes"}:       "IngressRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}: "HTTPRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}:   "GatewayList",
 	})
 	crd := &atomic.Bool{}
 	crd.Store(withIngressRouteCRD)

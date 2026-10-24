@@ -23,7 +23,7 @@ func ingressRouteGVR() schema.GroupVersionResource {
 }
 
 // publicURLs returns, per "namespace/service", the set of public base URLs that
-// Ingress and IngressRoute objects route to it. Deliberately conservative, like
+// Ingress, IngressRoute and Gateway API HTTPRoute objects route to it. Deliberately conservative, like
 // the Traefik label derivation: only host-based routes with the root path count
 // (a path prefix would need to know whether the controller strips it before the
 // request reaches the Service), and wildcard hosts are ignored. The caller only
@@ -48,6 +48,14 @@ func publicURLs(c caches) map[string]map[string]bool {
 	for _, l := range c.routes {
 		for _, obj := range listUnstructured(l) {
 			addIngressRoute(obj, add)
+		}
+	}
+	if len(c.httpRoutes) > 0 {
+		gws := gatewayListeners(c)
+		for _, l := range c.httpRoutes {
+			for _, obj := range listUnstructured(l) {
+				addHTTPRoute(obj, gws, add)
+			}
 		}
 	}
 	return out
@@ -119,11 +127,16 @@ func routeService(raw any, defaultNS string) (string, bool) {
 	return ns + "/" + name, name != ""
 }
 
-// watchIngressRoutes starts the IngressRoute informers as soon as the CRD exists.
-// Without the CRD the informer would fail forever, so it is looked up first and
-// rechecked every minute.
-func (s *Source) watchIngressRoutes(ctx context.Context, events cache.ResourceEventHandler) {
-	gv := ingressRouteGVR().GroupVersion().String()
+// watchCRD starts informers for an optional CRD as soon as it exists. Without the CRD the informer
+// would fail forever, so it is looked up first and rechecked periodically. register receives the listers.
+func (s *Source) watchCRD(
+	ctx context.Context,
+	gvr schema.GroupVersionResource,
+	what string,
+	events cache.ResourceEventHandler,
+	register func(c *caches, l []cache.GenericLister),
+) {
+	gv := gvr.GroupVersion().String()
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	logged := false
@@ -132,8 +145,7 @@ func (s *Source) watchIngressRoutes(ctx context.Context, events cache.ResourceEv
 			break
 		}
 		if !logged {
-			s.log.Info("Traefik IngressRoute CRD not found; IngressRoute URLs are ignored until it appears",
-				zap.String("groupVersion", gv))
+			s.log.Info(what+" CRD not found; its URLs are ignored until it appears", zap.String("groupVersion", gv))
 			logged = true
 		}
 		timer.Reset(s.cfg.CRDRecheck)
@@ -147,16 +159,16 @@ func (s *Source) watchIngressRoutes(ctx context.Context, events cache.ResourceEv
 	var listers []cache.GenericLister
 	for _, ns := range s.namespaces() {
 		f := dynamicinformer.NewFilteredDynamicSharedInformerFactory(s.cl.Dynamic, s.cfg.Resync, ns, nil)
-		inf := f.ForResource(ingressRouteGVR())
+		inf := f.ForResource(gvr)
 		if _, err := inf.Informer().AddEventHandler(events); err != nil {
-			s.log.Error("cannot register IngressRoute event handler", zap.Error(err))
+			s.log.Error("cannot register "+what+" event handler", zap.Error(err))
 			continue
 		}
 		listers = append(listers, inf.Lister())
 		f.Start(ctx.Done())
 	}
 	s.mu.Lock()
-	s.caches.routes = append(s.caches.routes, listers...)
+	register(&s.caches, listers)
 	s.mu.Unlock()
-	s.log.Info("watching Traefik IngressRoutes")
+	s.log.Info("watching " + what + "s")
 }
