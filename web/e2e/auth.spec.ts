@@ -148,3 +148,31 @@ test('changing the own password keeps this browser signed in and works for the n
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByTestId('current-user')).toHaveText('admin')
 })
+
+test('the navigation reaches every page, and the API page documents REST (OpenAPI) and events (AsyncAPI)', async ({ page }) => {
+  await signIn(page, ADMIN.name, 'a brand new password')
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await expect(nav.getByRole('link', { name: 'Users' })).toBeVisible()
+
+  await nav.getByRole('link', { name: 'API' }).click()
+  await expect(page).toHaveURL(/\/api-docs(#.*)?$/)
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator HTTP API' })).toBeVisible()
+  await expect(page.getByText('Follow the service list live').first()).toBeVisible() // the OpenAPI side
+
+  await page.getByText('REST API (OpenAPI)').first().click() // the document switcher
+  await page.getByText('Events (AsyncAPI)').first().click()
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator events' })).toBeVisible()
+  await expect(page.getByText('Service list').first()).toBeVisible() // the AsyncAPI channel
+
+  // the raw documents are public and valid JSON, so a custom frontend can fetch them
+  for (const name of ['openapi', 'asyncapi']) {
+    const res = await page.request.get(`/spec/${name}.json`)
+    expect(res.status()).toBe(200)
+    expect(Object.keys(await res.json())).toContain(name)
+  }
+
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Status' }).click()
+  await expect(page.getByTestId('current-user')).toHaveText('admin') // the PrimeVue menubar of the status page
+  await page.getByRole('menubar').getByRole('menuitem', { name: 'API' }).click()
+  await expect(page).toHaveURL(/\/api-docs(#.*)?$/)
+})

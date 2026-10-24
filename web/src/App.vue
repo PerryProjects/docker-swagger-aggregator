@@ -11,6 +11,7 @@ const LoginView = defineAsyncComponent(() => import('./views/LoginView.vue'))
 const SetupView = defineAsyncComponent(() => import('./views/SetupView.vue'))
 const StatusView = defineAsyncComponent(() => import('./views/StatusView.vue'))
 const UsersView = defineAsyncComponent(() => import('./views/UsersView.vue'))
+const ApiDocsView = defineAsyncComponent(() => import('./views/ApiDocsView.vue'))
 
 const { session } = useSession() // loaded by main.ts before the app starts
 
@@ -30,6 +31,7 @@ if (route === 'users' && session.value && !needsLogin.value && !isAdmin.value) l
     </AppShell>
     <AppShell v-else-if="route === 'status'"><StatusView /></AppShell>
     <AppShell v-else-if="route === 'users' && isAdmin"><UsersView /></AppShell>
+    <ApiDocsView v-else-if="route === 'api'" />
     <ReferenceView v-else-if="route === 'docs'" />
   </template>
 </template>

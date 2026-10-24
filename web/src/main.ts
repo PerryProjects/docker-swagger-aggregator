@@ -9,7 +9,7 @@ import { useSession } from './composables/useSession'
 async function start() {
   const info = await useSession().load()
   const app = createApp(App)
-  const needsShell = route !== 'docs' || (info.mode === 'build_in' && !info.user)
+  const needsShell = route === 'status' || route === 'users' || (info.mode === 'build_in' && !info.user)
   if (needsShell) {
     const [{ default: PrimeVue }, { default: ToastService }, { default: ConfirmationService }, { default: Aura }] =
       await Promise.all([

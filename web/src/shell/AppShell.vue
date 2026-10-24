@@ -20,6 +20,7 @@ const builtIn = computed(() => session.value?.mode === 'build_in')
 
 const items = computed(() => [
   { label: 'Documentation', icon: 'pi pi-book', url: BASE, class: route === 'docs' ? 'font-semibold' : '' },
+  { label: 'API', icon: 'pi pi-code', url: `${BASE}api-docs`, class: route === 'api' ? 'font-semibold' : '' },
   { label: 'Status', icon: 'pi pi-heart', url: `${BASE}status`, class: route === 'status' ? 'font-semibold' : '' },
   ...(user.value?.role === 'admin'
     ? [{ label: 'Users', icon: 'pi pi-users', url: `${BASE}users`, class: route === 'users' ? 'font-semibold' : '' }]

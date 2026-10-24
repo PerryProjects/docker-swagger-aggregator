@@ -16,7 +16,7 @@ const bravo: Svc = { name: 'bravo' }
 const charlie: Svc = { name: 'charlie' }
 
 const state = (page: Page) =>
-  page.evaluate(() => ({ hash: location.hash, scrollY: Math.round(window.scrollY), top: document.body.innerText.split('\n')[0] }))
+  page.evaluate(() => ({ hash: location.hash, scrollY: Math.round(window.scrollY), top: (() => { const nav = new Set((document.querySelector('nav.appnav') as HTMLElement | null)?.innerText.split('\n') ?? []); return document.body.innerText.split('\n').find((l) => l && !nav.has(l)) })() }))
 
 async function openBravoScrolled(page: Page) {
   await page.goto('/')
@@ -137,6 +137,15 @@ const expectSummary = async (page: Page, up: number, down: number) => {
   await expect(summary).toContainText(`${down} down`)
 }
 
+test('the documentation has a navigation to the other pages', async ({ page }) => {
+  await page.goto('/')
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await expect(nav.getByRole('link', { name: 'Documentation' })).toHaveAttribute('aria-current', 'page')
+  await expect(nav.getByRole('link', { name: 'API' })).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Status' })).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Users' })).toHaveCount(0) // auth=none has no users
+})
+
 test('the documentation view loads no PrimeVue or Tailwind styles', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText('🟢 alpha').first()).toBeVisible()
@@ -177,7 +186,7 @@ test.describe('status page', () => {
     await expect(page.getByText('🟢 bravo').first()).toBeVisible()
     await expect.poll(() => page.url()).toContain('#bravo')
 
-    await page.getByRole('link', { name: 'Service status' }).click()
+    await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Status' }).click()
     await expect(page).toHaveURL(/\/status$/)
     await expect(page.getByRole('heading', { name: 'Service status' })).toBeVisible()
   })
