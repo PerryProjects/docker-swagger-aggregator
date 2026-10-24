@@ -54,6 +54,23 @@ Locally the UI port comes from `docker-compose.override.yml` (loaded automatical
 More combinations (own login, OIDC, MCP, two API instances, Traefik, a remote Kubernetes cluster) are ready-made in
 [`examples/`](examples/README.md).
 
+## Image size
+
+One image holds the API and the web server. Measured (this repository, `docker build`; "pull" is what a registry transfers, gzip):
+
+| Build | On disk | Pull | |
+|---|---|---|---|
+| default (`docker build .`) | 88 MB | 22 MB | the full API **with Kubernetes support**: what `deploy/kubernetes` uses |
+| `--build-arg KUBERNETES=false` | 60 MB | 16 MB | **what `docker compose` builds**: the API without client-go (`-tags nokubernetes`): 10 instead of 31 MB |
+| + `--build-arg COMPRESS_BINARIES=best` | 40 MB | 15 MB | UPX-packed binaries: start ~0.08 s slower, ~5 MB more RAM per process |
+| + `--build-arg COMPRESS_BINARIES=lzma` | 34 MB | 12.5 MB | smaller still, start ~0.35 s slower |
+
+The big step is dropping Kubernetes support, which a Docker-only setup does not need (client-go and the Kubernetes API types are ~26 MB of
+the API binary). `--kubernetes` in such an image fails at startup with a clear message; `examples/kubernetes-remote.yml` builds the full one.
+UPX shrinks the files on disk but little of what is pulled (the registry compresses anyway); it also makes some security scanners suspicious and
+every process start decompress the binary. It is off by default: use it only if disk space matters more than that. The web server (23 MB) has no
+Kubernetes code; its UI is 6.5 MB (1.8 MB gzipped).
+
 ## Labels
 
 | Label | Default | Meaning |
@@ -175,11 +192,28 @@ es.addEventListener('services', (e) => render(JSON.parse(e.data)))
 With `auth=build_in`, `POST /auth/login` (JSON) sets the session cookie, `GET /auth/session` tells which login to show;
 `auth=oidc` redirects the browser to the provider.
 
-**Same origin is required.** This server does not send CORS headers, and the session is a `SameSite=Lax` cookie, so a frontend on
-another origin cannot use it. Host your frontend on the same origin: point `--dir` of `swagger-aggregator-web` at your build (it needs an
-`index.html`; unknown paths fall back to it, so a single-page app works), or route your frontend and this server's paths (`/api`, `/auth`,
-`/spec`) to one host in your reverse proxy. For tools and assistants that cannot do a browser login there is the token-protected
-[MCP server](#mcp-ai-assistants).
+**Same origin is the simplest.** Point `--dir` of `swagger-aggregator-web` at your build (it needs an `index.html`; unknown paths fall
+back to it, so a single-page app works), or route your frontend and this server's paths (`/api`, `/auth`, `/spec`) to one host in your
+reverse proxy. Then none of the following is needed.
+
+**A frontend on another origin** needs the CORS list: `SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS=https://app.example.com` (exact origins,
+comma separated; `*` is refused, because the browser only sends cookies to an explicitly named origin). For those origins the server sends
+`Access-Control-Allow-Origin: <that origin>` and `Access-Control-Allow-Credentials: true`, answers preflights itself (methods `GET, POST, PUT,
+PATCH, DELETE`; headers `Content-Type`, `Accept`, `If-None-Match`) and exposes `ETag` and `Retry-After`. The frontend must ask for credentials:
+`fetch(url, {credentials: "include"})` and `new EventSource(url, {withCredentials: true})`. See [`examples/custom-frontend.yml`](examples/custom-frontend.yml).
+
+- **The cookie is `SameSite=Lax` by default.** That works for a frontend on the same *site* (`localhost:5173` talking to `localhost:3000`, or
+  `app.example.com` talking to `docs.example.com`). A frontend on another *site* needs `SWAGGER_AGGREGATOR_WEB_COOKIE_SAMESITE=none`; the
+  cookie is then `Secure`, i.e. HTTPS (or localhost). `none` is refused without a CORS list.
+- **The server checks `Origin` itself once a CORS list is set.** With `SameSite=None` the browser no longer keeps other sites from sending
+  the cookie, so requests that change something (`POST`, `PUT`, `PATCH`, `DELETE`) with an `Origin` that is neither listed nor the server's own
+  get `403`, and a preflight from an unlisted origin gets `403`. Requests without an `Origin` header (curl, other servers) pass. The server's own
+  origin is recognised by the `Host` (or `X-Forwarded-Host`) header: a proxy that rewrites `Host` must send `X-Forwarded-Host`.
+- **Without a CORS list nothing changes:** same origin only, `SameSite=Lax`, no extra checks.
+- Tested in a real browser: a page on another origin signs in, reads the API and follows the event stream; an unlisted origin is blocked.
+  The `SameSite=None` cookie attributes are unit-tested; a truly cross-site setup (two domains over HTTPS) was not run.
+
+For tools and assistants that cannot do a browser login there is the token-protected [MCP server](#mcp-ai-assistants).
 
 ## "Try it" (CORS)
 
@@ -349,7 +383,7 @@ remount keeps the open document, stale hash cleanup, group/order, hide-offline, 
 Note: `vue-tsc` (typecheck) needs Node; the Docker image has none, so it builds with `bun run bundle`.
 
 `swagger-aggregator-web` flags/env: `--listen`/`SWAGGER_AGGREGATOR_WEB_LISTEN` (`:3000`), `--dir`/`SWAGGER_AGGREGATOR_WEB_DIR` (`web/dist`),
-`--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`), the `--auth`/`--oidc-*`/`--session-*` options ([Authentication](#authentication)), `--base-path`/`SWAGGER_AGGREGATOR_WEB_BASE_PATH` (none; e.g. `/docs`,
+`--api`/`SWAGGER_AGGREGATOR_WEB_API` (`http://localhost:8080`), the `--auth`/`--oidc-*`/`--session-*` options ([Authentication](#authentication)), `--cors-origins`/`SWAGGER_AGGREGATOR_WEB_CORS_ORIGINS` and `--cookie-samesite`/`SWAGGER_AGGREGATOR_WEB_COOKIE_SAMESITE` ([a frontend on another origin](#build-your-own-frontend)), `--base-path`/`SWAGGER_AGGREGATOR_WEB_BASE_PATH` (none; e.g. `/docs`,
 stripped when present, so it works with or without a `StripPrefix` in front; set the same value on the API).
 
 ## CI/CD
@@ -491,12 +525,26 @@ that in the reverse proxy). Specs can be sensitive: they go to whatever model th
 
 ## UI stack and licences
 
-The documentation is [Scalar](https://github.com/scalar/scalar). The login, setup, status and users pages are Vue + **PrimeVue 4.5.5**
-+ Tailwind CSS 4 (`web/src/shell`, `web/src/views`); Tailwind and PrimeVue are loaded only for those pages, so Scalar keeps its own styles (an
-e2e test checks that). **PrimeVue is pinned to 4.x on purpose:** 4.x (MIT) is at its last release (4.5.5, April 2026), while PrimeVue
-**5.x is under the PrimeUI licence**: it needs a licence key, is free only below revenue/developer/employee limits with a yearly
-confirmation, and is shipped compiled. That does not fit a repository others clone and build. Moving to 5.x, or to a different
-component library, is a decision to make once 4.x stops getting fixes.
+The documentation is [Scalar](https://github.com/scalar/scalar). The login, setup, status and users pages are Vue + **PrimeVue 5** + Tailwind
+CSS 4 (`web/src/shell`, `web/src/views`); Tailwind and PrimeVue are loaded only for those pages, so Scalar keeps its own styles (an e2e test checks
+that).
+
+**PrimeVue 5 is not MIT.** It is under the *PrimeUI* licence and needs a **licence key**, which the browser verifies offline (no network, no
+telemetry). This project uses the **Community** licence, which PrimeTek grants free of charge to individuals and to organisations below
+its limits (fewer than 5 developers and 10 employees, under 1 M USD revenue, under 3 M USD outside funding), renewed yearly by confirming that you
+still qualify. Whether *you* qualify is for you to check against [the licence](https://primeui.dev/licenses/community); it is not decided here.
+
+- **The key is not in the repository** (the licence says it must not be published for others to use). It is given at build time:
+  `VITE_PRIMEVUE_LICENSE` for `bun run dev` / `build` (put it in `web/.env.local`, which git ignores), and `PRIMEVUE_LICENSE` for the Docker
+  build (`docker build --build-arg PRIMEVUE_LICENSE=...`; `docker compose` reads it from `PRIMEVUE_LICENSE` in a git-ignored `.env`). In CI set it
+  as a secret. Note that the key necessarily ends up **inside the built JavaScript**; the licence says it may and that it holds nothing sensitive.
+- **Without a key everything works**, but PrimeVue logs a console warning and shows a small red *"Invalid PrimeUI License"* badge in the corner of
+  the login, setup, status and users pages. So anyone who clones this repository and builds it needs their own key (or lives with the badge).
+- **The key expires** (the one in use here: 2027-10-24, plus a 30-day grace period). After that the badge appears until you renew it.
+- **What this means for open-sourcing the repository:** the code can be published under a free licence, but PrimeVue 5 is a dependency with its
+  own terms that every user of the *built* UI has to meet. If that is unwanted, PrimeVue **4.5.5 (MIT, its last 4.x release, April 2026)** is
+  the free alternative: it needs no key and gets no further updates, and the change back is small (`primevue@4.5.5`, `@primeuix/themes@2.0.3`,
+  `primeicons@7.0.0`, drop the `license` option in `web/src/main.ts`).
 
 ## Frontend behaviour (verified against `@scalar/api-reference` 1.76.0)
 
@@ -573,7 +621,7 @@ A k3d cluster, by contrast, shows its nodes as ordinary containers in `docker ps
 
 ## Known limitations
 
-- PrimeVue is on the last 4.x release (MIT); 4.x will not get further fixes. See [UI stack and licences](#ui-stack-and-licences).
+- PrimeVue 5 needs a licence key (Community, renewed yearly); without it a badge shows on the PrimeVue pages. See [UI stack and licences](#ui-stack-and-licences).
 - The built-in authentication is single-node SQLite without two-factor login or self-service password reset; the MCP token is one shared secret. See [Authentication](#authentication) and [MCP](#mcp-ai-assistants).
 - `moby/moby/client` is **v0.x** (v0.6.2 is the latest release, checked 2026-10-24); its API may still change between releases. Pinned in `go.mod`.
 - Compose replicas (`scale`) are one service: it is up while any replica is up and is documented by one healthy replica (the spec's "Try it" path points at that replica, and moves with it). Replicas are recognised by the compose project + service labels; unrelated containers that merely share a name get a `-<id>` suffix, which is only stable while the container runs.

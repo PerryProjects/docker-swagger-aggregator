@@ -17,9 +17,10 @@ removes the `web-data` volume, i.e. the users of the built-in login.
 | [`build-in-admin.yml`](build-in-admin.yml) + [`.env.example`](build-in-admin.env.example) | own login; the first admin comes from the environment | yes: login |
 | [`oidc-dex.yml`](oidc-dex.yml) | login at an OpenID Connect provider (a local Dex stands in for Authelia, Keycloak, ...) | yes: real browser, sign-in, status page |
 | [`mcp.yml`](mcp.yml) | the read-only MCP server at `/mcp` (stackable with any login) | yes: 401 without token, `tools/list` with it, together with `build_in` |
+| [`custom-frontend.yml`](custom-frontend.yml) | your own frontend on another origin (CORS list for the cookie) | yes: real browser, sign-in + SSE from another origin |
 | [`scaled.yml`](scaled.yml) | two API instances | yes: two containers, same spec hashes |
 | [`traefik-build-in.yml`](traefik-build-in.yml) | behind Traefik with TLS, own login, optional MCP and base path | config renders; not run (needs your Traefik) |
-| [`kubernetes-remote.yml`](kubernetes-remote.yml) | Kubernetes Services of a remote cluster instead of Docker containers | config renders; **not run** (needs a reachable cluster) |
+| [`kubernetes-remote.yml`](kubernetes-remote.yml) | Kubernetes Services of a remote cluster instead of Docker containers (builds the API *with* Kubernetes support, see [Image size](../README.md#image-size)) | config renders; **not run** (needs a reachable cluster) |
 
 Settings that have no example of their own and are set the same way (environment of `api` or `web`): HTTPS workloads
 (`--insecure-upstream-tls`, label `scheme=https`), the base path, probe interval, label prefix: see the
