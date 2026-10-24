@@ -486,3 +486,31 @@ func TestWebProtectCoversUIAPIAndProxiesButNotHealthz(t *testing.T) {
 		t.Errorf("with a session the API is reachable: %d %q", code, body)
 	}
 }
+
+func TestWebMCPSitsOutsideTheLoginProtection(t *testing.T) {
+	t.Parallel()
+
+	apiURL, _ := url.Parse("http://127.0.0.1:1")
+	ui := fstest.MapFS{"index.html": {Data: []byte("INDEX")}}
+	denyAll := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login", http.StatusUnauthorized) })
+	}
+	mcp := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("MCP")) })
+	h := server.NewWebHandler(server.WebConfig{UI: ui, API: apiURL, BasePath: "/docs", Protect: denyAll, MCP: mcp})
+	body := func(path string) (int, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		return rec.Code, strings.TrimSpace(rec.Body.String())
+	}
+	for _, p := range []string{"/docs/mcp", "/mcp"} {
+		if code, b := body(p); code != http.StatusOK || b != "MCP" {
+			t.Errorf("%s: want the MCP handler, got %d %q", p, code, b)
+		}
+	}
+	if code, _ := body("/docs/api/services"); code != http.StatusUnauthorized {
+		t.Errorf("everything else stays behind the login, got %d", code)
+	}
+	if code, _ := body("/docs/mcp/other"); code != http.StatusUnauthorized {
+		t.Errorf("only /mcp itself is outside the login, got %d", code)
+	}
+}

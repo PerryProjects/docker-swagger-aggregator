@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/perryprojects/docker-swagger-aggregator/internal/auth"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/logging"
+	"github.com/perryprojects/docker-swagger-aggregator/internal/mcptools"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/server"
 	"github.com/perryprojects/docker-swagger-aggregator/internal/store"
 )
@@ -76,6 +78,8 @@ func newCmd() *cobra.Command {
 	f.StringSlice("oidc-allowed-emails", nil, "only these (verified) e-mail addresses may sign in (alternative to groups)")
 	f.String("session-secret", "", "secret that signs and encrypts the session cookie, >= 32 characters (oidc: required; build_in: default is a key file in --data-dir)")
 	f.Duration("session-ttl", 8*time.Hour, "how long a login lasts (auth=oidc)")
+	f.Bool("mcp", false, "serve a read-only MCP server for AI assistants at /mcp (needs --mcp-token)")
+	f.String("mcp-token", "", "bearer token the MCP clients must send, >= 32 characters (use the environment variable)")
 	f.String("log-level", "info", "debug, info, warn or error")
 	f.String("log-format", logging.FormatConsole, "console (human readable) or json (for log collectors)")
 	v.SetEnvPrefix(envPrefix)
@@ -128,13 +132,23 @@ func run(parent context.Context, v *viper.Viper) error {
 	}
 	defer closeAuth()
 
+	var mcpHandler http.Handler
+	if v.GetBool("mcp") {
+		if mcpHandler, err = mcptools.Handler(mcptools.HTTPBackend{Base: api}, version(), v.GetString("mcp-token")); err != nil {
+			return fmt.Errorf("--mcp: %w", err)
+		}
+		log.Info("MCP server enabled", zap.String("path", base+"/mcp"))
+	} else if v.GetString("mcp-token") != "" {
+		log.Warn("--mcp-token is ignored because --mcp is off")
+	}
+
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// No WriteTimeout: it would kill the proxied SSE stream.
 	srv := &http.Server{
 		Addr:              v.GetString("listen"),
-		Handler:           server.NewWebHandler(server.WebConfig{UI: os.DirFS(dir), API: api, BasePath: base, Protect: protect}),
+		Handler:           server.NewWebHandler(server.WebConfig{UI: os.DirFS(dir), API: api, BasePath: base, Protect: protect, MCP: mcpHandler}),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 	go func() {
@@ -258,4 +272,12 @@ func splitList(in []string) []string {
 		}
 	}
 	return out
+}
+
+// version is the module version of the binary ("devel" for a plain `go build`), reported to MCP clients.
+func version() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+		return bi.Main.Version
+	}
+	return "dev"
 }

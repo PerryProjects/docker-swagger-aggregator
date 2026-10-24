@@ -23,6 +23,9 @@ type WebConfig struct {
 	// Protect wraps everything the server answers (UI, /api, the proxies, SSE), e.g. with a login.
 	// It sees paths without the BasePath. nil: no protection.
 	Protect func(http.Handler) http.Handler
+	// MCP serves the Model Context Protocol at /mcp. It sits outside Protect on purpose: AI clients cannot
+	// do a browser login, so the handler has to authenticate itself (a bearer token). nil: no /mcp.
+	MCP http.Handler
 }
 
 // NewWebHandler serves the built UI and forwards /api/ to the API, so the
@@ -40,6 +43,12 @@ func NewWebHandler(cfg WebConfig) http.Handler {
 	var h http.Handler = mux
 	if cfg.Protect != nil {
 		h = cfg.Protect(h)
+	}
+	if cfg.MCP != nil {
+		outer := http.NewServeMux()
+		outer.Handle("/mcp", cfg.MCP)
+		outer.Handle("/", h)
+		h = outer
 	}
 	return securityHeaders(stripBasePath(cfg.BasePath, h))
 }
