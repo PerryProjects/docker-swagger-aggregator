@@ -44,7 +44,7 @@ jobs:
       # the small Docker-only API (no client-go) must keep building and passing
       - run: go vet -tags nokubernetes ./...
       - run: go test -tags nokubernetes -count=1 ./internal/app/ ./cmd/...
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0 # the version .golangci.yml was written for; bump it on purpose, not by accident
 
@@ -73,7 +73,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-node@v4 # vue-tsc (typecheck) needs Node, not the Bun runtime
+      - uses: actions/setup-node@v7 # vue-tsc (typecheck) needs Node, not the Bun runtime
         with:
           node-version: 24
       - run: bun install --frozen-lockfile
@@ -107,7 +107,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
       - id: meta
         uses: docker/metadata-action@v5
@@ -126,7 +126,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
