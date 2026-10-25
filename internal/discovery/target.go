@@ -49,6 +49,12 @@ type Target struct {
 	Scheme string
 }
 
+// The schemes a workload can be reached with.
+const (
+	SchemeHTTP  = "http"
+	SchemeHTTPS = "https"
+)
+
 // ParseTarget interprets a workload's attributes. nameFallbacks are tried in
 // order when there is no `<prefix>.name`; exposedPorts must be sorted ascending
 // and the first one is the default port.
@@ -61,7 +67,7 @@ func ParseTarget(
 	if attrs[EnableKey(prefix)] != "true" {
 		return Target{}, ErrNotEnabled
 	}
-	t := Target{Path: defaultPath, Group: attrs[prefix+keyGroup], Scheme: "http"}
+	t := Target{Path: defaultPath, Group: attrs[prefix+keyGroup], Scheme: SchemeHTTP}
 
 	t.Name = first(append([]string{attrs[prefix+keyName]}, nameFallbacks...)...)
 	if t.Name == "" {
@@ -81,7 +87,7 @@ func ParseTarget(
 		return t, err
 	}
 	if s := attrs[prefix+keyScheme]; s != "" {
-		if s != "http" && s != "https" {
+		if s != SchemeHTTP && s != SchemeHTTPS {
 			return t, fmt.Errorf("invalid %s%s %q (http or https)", prefix, keyScheme, s)
 		}
 		t.Scheme = s
@@ -115,7 +121,7 @@ func parseServerURL(prefix string, attrs map[string]string) (string, error) {
 		return "", nil
 	}
 	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != SchemeHTTP && u.Scheme != SchemeHTTPS) || u.Host == "" {
 		return "", fmt.Errorf("invalid %s%s %q", prefix, keyServerURL, s)
 	}
 	return s, nil

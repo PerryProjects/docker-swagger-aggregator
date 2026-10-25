@@ -26,6 +26,11 @@ import (
 )
 
 const (
+	errorKey           = "error" // the JSON key of every error response
+	errUnauthenticated = "unauthenticated"
+	schemeHTTP         = "http"
+	schemeHTTPS        = "https"
+
 	loginPath    = "/auth/login"
 	callbackPath = "/auth/callback"
 	logoutPath   = "/auth/logout"
@@ -35,12 +40,15 @@ const (
 	flowTTL       = 10 * time.Minute
 	minSecretLen  = 32
 
+	flowStateLen       = 24 // random bytes of the state and nonce values
 	defaultTTL         = 8 * time.Hour
 	defaultGroupsClaim = "groups"
 )
 
 // DefaultScopes asks for the groups claim too; providers that do not know the scope ignore it.
-var DefaultScopes = []string{oidc.ScopeOpenID, "profile", "email", "groups"}
+func DefaultScopes() []string {
+	return []string{oidc.ScopeOpenID, "profile", "email", "groups"}
+}
 
 // Config configures the OIDC login. All fields except the optional ones are required.
 type Config struct {
@@ -100,7 +108,7 @@ type flow struct {
 // New validates the configuration. It does not contact the provider.
 func New(cfg Config, log *zap.Logger) (*OIDC, error) {
 	if cfg.Scopes == nil {
-		cfg.Scopes = DefaultScopes
+		cfg.Scopes = DefaultScopes()
 	}
 	if cfg.GroupsClaim == "" {
 		cfg.GroupsClaim = defaultGroupsClaim
@@ -128,7 +136,10 @@ func New(cfg Config, log *zap.Logger) (*OIDC, error) {
 
 func (c Config) validate() error {
 	var errs []error
-	if u, err := url.Parse(c.Issuer); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if u, err := url.Parse(
+		c.Issuer,
+	); err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) ||
+		u.Host == "" {
 		errs = append(errs, fmt.Errorf("oidc issuer %q must be an http(s) URL", c.Issuer))
 	}
 	if c.ClientID == "" {
@@ -138,11 +149,14 @@ func (c Config) validate() error {
 		errs = append(errs, errors.New("oidc client secret is required"))
 	}
 	if len(c.SessionSecret) < minSecretLen {
-		errs = append(errs, fmt.Errorf("session secret must be at least %d characters (e.g. `openssl rand -base64 48`)", minSecretLen))
+		errs = append(
+			errs,
+			fmt.Errorf("session secret must be at least %d characters (e.g. `openssl rand -base64 48`)", minSecretLen),
+		)
 	}
 	u, err := url.Parse(c.RedirectURL)
 	switch {
-	case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+	case err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) || u.Host == "":
 		errs = append(errs, fmt.Errorf("oidc redirect url %q must be an absolute http(s) URL", c.RedirectURL))
 	case u.Path != c.BasePath+callbackPath:
 		errs = append(errs, fmt.Errorf("oidc redirect url path must be %q, got %q", c.BasePath+callbackPath, u.Path))
@@ -184,7 +198,8 @@ func (a *OIDC) Wrap(next http.Handler) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthenticated", "login": a.cfg.BasePath + loginPath})
+		_ = json.NewEncoder(w).
+			Encode(map[string]string{errorKey: errUnauthenticated, "login": a.cfg.BasePath + loginPath})
 	})
 }
 
@@ -257,7 +272,7 @@ func (a *OIDC) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	a.clearCookie(w, flowCookie)
 	q := r.URL.Query()
-	if e := q.Get("error"); e != "" {
+	if e := q.Get(errorKey); e != "" {
 		a.log.Info("oidc login refused by the provider", zap.String("error", e))
 		http.Error(w, "login refused by the identity provider", http.StatusForbidden)
 		return
@@ -272,39 +287,17 @@ func (a *OIDC) callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := a.clientCtx(r.Context())
-	tok, err := a.oauth.Exchange(ctx, q.Get("code"), oauth2.VerifierOption(f.Verifier))
+	idToken, claims, err := a.exchange(ctx, q.Get("code"), f)
 	if err != nil {
-		a.log.Warn("oidc code exchange failed", zap.Error(err))
 		http.Error(w, "login failed", http.StatusBadGateway)
 		return
-	}
-	raw, _ := tok.Extra("id_token").(string)
-	idToken, err := a.verifier.Verify(ctx, raw)
-	if err != nil || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(f.Nonce)) != 1 {
-		a.log.Warn("oidc id token rejected", zap.Error(err))
-		http.Error(w, "login failed", http.StatusBadGateway)
-		return
-	}
-	claims := map[string]any{}
-	if err = idToken.Claims(&claims); err != nil {
-		http.Error(w, "login failed", http.StatusBadGateway)
-		return
-	}
-	if a.restricted() && !a.hasAuthzClaims(claims) {
-		// Some providers (e.g. Authelia) only put groups into userinfo, not into the ID token.
-		if ui, uerr := a.provider.UserInfo(ctx, oauth2.StaticTokenSource(tok)); uerr == nil {
-			extra := map[string]any{}
-			if ui.Claims(&extra) == nil && ui.Subject == idToken.Subject {
-				for k, v := range extra {
-					if _, has := claims[k]; !has {
-						claims[k] = v
-					}
-				}
-			}
-		}
 	}
 
-	s := session{Sub: idToken.Subject, Email: str(claims["email"]), Name: first(str(claims["name"]), str(claims["preferred_username"]))}
+	s := session{
+		Sub:   idToken.Subject,
+		Email: str(claims["email"]),
+		Name:  first(str(claims["name"]), str(claims["preferred_username"])),
+	}
 	if !a.allowed(claims) {
 		a.log.Info("oidc user not allowed", zap.String("sub", s.Sub), zap.String("email", s.Email))
 		http.Error(w, "you are not allowed to use this application", http.StatusForbidden)
@@ -315,6 +308,51 @@ func (a *OIDC) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, f.Return, http.StatusFound)
+}
+
+// exchange trades the code for tokens, verifies the ID token and returns it with its claims (plus those of the
+// userinfo endpoint when the access rules need claims the ID token lacks). It logs why it failed.
+func (a *OIDC) exchange(ctx context.Context, code string, f flow) (*oidc.IDToken, map[string]any, error) {
+	tok, err := a.oauth.Exchange(ctx, code, oauth2.VerifierOption(f.Verifier))
+	if err != nil {
+		a.log.Warn("oidc code exchange failed", zap.Error(err))
+		return nil, nil, err
+	}
+	raw, _ := tok.Extra("id_token").(string)
+	idToken, err := a.verifier.Verify(ctx, raw)
+	if err == nil && subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(f.Nonce)) != 1 {
+		err = errors.New("nonce mismatch")
+	}
+	if err != nil {
+		a.log.Warn("oidc id token rejected", zap.Error(err))
+		return nil, nil, err
+	}
+	claims := map[string]any{}
+	if err = idToken.Claims(&claims); err != nil {
+		return nil, nil, err
+	}
+	if a.restricted() && !a.hasAuthzClaims(claims) {
+		a.addUserInfoClaims(ctx, tok, idToken, claims)
+	}
+	return idToken, claims, nil
+}
+
+// addUserInfoClaims adds the userinfo claims that the ID token lacks. Some providers (e.g. Authelia) only put
+// groups into userinfo.
+func (a *OIDC) addUserInfoClaims(ctx context.Context, tok *oauth2.Token, idToken *oidc.IDToken, claims map[string]any) {
+	ui, err := a.provider.UserInfo(ctx, oauth2.StaticTokenSource(tok))
+	if err != nil {
+		return
+	}
+	extra := map[string]any{}
+	if ui.Claims(&extra) != nil || ui.Subject != idToken.Subject {
+		return
+	}
+	for k, v := range extra {
+		if _, has := claims[k]; !has {
+			claims[k] = v
+		}
+	}
 }
 
 func (a *OIDC) logout(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +391,8 @@ func (a *OIDC) allowed(claims map[string]any) bool {
 		return false
 	}
 	email := str(claims["email"])
-	return email != "" && slices.ContainsFunc(a.cfg.AllowedEmails, func(e string) bool { return strings.EqualFold(e, email) })
+	return email != "" &&
+		slices.ContainsFunc(a.cfg.AllowedEmails, func(e string) bool { return strings.EqualFold(e, email) })
 }
 
 // safeReturn accepts only a local path (with the base path), so the login cannot be turned into an open redirect.
@@ -379,6 +418,7 @@ func (a *OIDC) setCookie(w http.ResponseWriter, name string, v any, ttl time.Dur
 		a.log.Error("cannot encode cookie", zap.String("cookie", name), zap.Error(err))
 		return false
 	}
+	//nolint:gosec // Secure is decided once per deployment (a.secure), plain-HTTP setups still work
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: enc, Path: a.cookiePath, MaxAge: int(ttl.Seconds()),
 		HttpOnly: true, Secure: a.secure, SameSite: sameSiteOrLax(a.cfg.SameSite),
@@ -387,6 +427,7 @@ func (a *OIDC) setCookie(w http.ResponseWriter, name string, v any, ttl time.Dur
 }
 
 func (a *OIDC) clearCookie(w http.ResponseWriter, name string) {
+	//nolint:gosec // see setCookie
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: "", Path: a.cookiePath, MaxAge: -1,
 		HttpOnly: true, Secure: a.secure, SameSite: sameSiteOrLax(a.cfg.SameSite),
@@ -394,7 +435,7 @@ func (a *OIDC) clearCookie(w http.ResponseWriter, name string) {
 }
 
 func random() string {
-	b := make([]byte, 24)
+	b := make([]byte, flowStateLen)
 	if _, err := rand.Read(b); err != nil {
 		panic(err) // crypto/rand does not fail on supported platforms; never continue with a guessable state
 	}

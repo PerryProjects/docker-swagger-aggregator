@@ -5,6 +5,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/perryprojects/docker-swagger-aggregator/internal/discovery"
 )
 
 const gatewayGroup = "gateway.networking.k8s.io"
@@ -94,7 +96,8 @@ func matchesWholeHost(rule map[string]any) bool {
 		if path == nil {
 			return true
 		}
-		if t, _ := path["type"].(string); (t == "" || t == "PathPrefix") && (path["value"] == nil || path["value"] == "/") {
+		if t, _ := path["type"].(string); (t == "" || t == "PathPrefix") &&
+			(path["value"] == nil || path["value"] == "/") {
 			return true
 		}
 	}
@@ -120,7 +123,7 @@ func backendService(raw any, defaultNS string) (string, bool) {
 	if group, _ := ref["group"].(string); group != "" {
 		return "", false
 	}
-	if w, ok := ref["weight"].(int64); ok && w == 0 {
+	if w, isInt := ref["weight"].(int64); isInt && w == 0 {
 		return "", false
 	}
 	name, _ := ref["name"].(string)
@@ -149,11 +152,11 @@ func routeScheme(host, routeNS string, parents []any, gateways map[string][]list
 		section, _ := ref["sectionName"].(string)
 		for _, l := range gateways[ns+"/"+name] {
 			if (section == "" || section == l.name) && l.protocol == "HTTPS" && listenerServes(l.hostname, host) {
-				return "https"
+				return discovery.SchemeHTTPS
 			}
 		}
 	}
-	return "http"
+	return discovery.SchemeHTTP
 }
 
 // listenerServes reports whether a listener hostname (empty, exact or "*.suffix") covers host.

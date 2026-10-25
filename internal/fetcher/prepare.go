@@ -80,6 +80,9 @@ func stringKeys(v any) any {
 	return v
 }
 
+// keyURL is the key of the URL in an OpenAPI server object.
+const keyURL = "url"
+
 // rewrite points the spec at serverURL or, if empty, at proxyPath. When proxying,
 // the path of the original server (e.g. /v1) is kept as a suffix.
 // OpenAPI 3 path- and operation-level `servers` overrides are rewritten the same way.
@@ -92,8 +95,8 @@ func rewrite(doc map[string]any, serverURL, proxyPath string, v2 bool) error {
 		return fmt.Errorf("invalid server-url %q", serverURL)
 	}
 	if !v2 {
-		rewriteServers(doc, func(any) []any { return []any{map[string]any{"url": serverURL}} })
-		doc["servers"] = []any{map[string]any{"url": serverURL}}
+		rewriteServers(doc, func(any) []any { return []any{map[string]any{keyURL: serverURL}} })
+		doc["servers"] = []any{map[string]any{keyURL: serverURL}}
 		return nil
 	}
 	doc["host"] = u.Host
@@ -115,17 +118,19 @@ func rewriteToProxy(doc map[string]any, proxyPath string, v2 bool) error {
 		var prefix string
 		if l, ok := servers.([]any); ok && len(l) > 0 {
 			first, _ := l[0].(map[string]any)
-			raw, _ := first["url"].(string)
+			raw, _ := first[keyURL].(string)
 			prefix = pathOf(raw)
 		}
-		return []any{map[string]any{"url": proxyPath + cleanPrefix(prefix)}}
+		return []any{map[string]any{keyURL: proxyPath + cleanPrefix(prefix)}}
 	}
 	rewriteServers(doc, toProxy)
 	doc["servers"] = toProxy(doc["servers"])
 	return nil
 }
 
-var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+func httpMethods() []string {
+	return []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+}
 
 // rewriteServers replaces the `servers` of every path item and operation that has its own.
 func rewriteServers(doc map[string]any, replace func(old any) []any) {
@@ -138,8 +143,8 @@ func rewriteServers(doc map[string]any, replace func(old any) []any) {
 		if old, has := item["servers"]; has {
 			item["servers"] = replace(old)
 		}
-		for _, m := range httpMethods {
-			if op, ok := item[m].(map[string]any); ok {
+		for _, m := range httpMethods() {
+			if op, isMap := item[m].(map[string]any); isMap {
 				if old, has := op["servers"]; has {
 					op["servers"] = replace(old)
 				}

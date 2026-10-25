@@ -310,7 +310,11 @@ func TestComposeReplicasShareOneNameAndReplicaKey(t *testing.T) {
 	api.set(inspect("c3", "solo", true, with(nil), onNetwork("n", "10.0.0.9"), exposing("8000/tcp")))
 	rec := run(t, api, docker.Config{})
 
-	waitFor(t, time.Second, func() bool { _, a := rec.get("c1"); _, b := rec.get("c2"); _, c := rec.get("c3"); return a && b && c })
+	waitFor(
+		t,
+		time.Second,
+		func() bool { _, a := rec.get("c1"); _, b := rec.get("c2"); _, c := rec.get("c3"); return a && b && c },
+	)
 	c1, _ := rec.get("c1")
 	c2, _ := rec.get("c2")
 	c3, _ := rec.get("c3")
