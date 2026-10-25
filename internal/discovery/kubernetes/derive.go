@@ -67,10 +67,10 @@ func addIngress(ing *networkingv1.Ingress, add func(key, u string)) {
 		if rule.Host == "" || rule.HTTP == nil || strings.Contains(rule.Host, "*") {
 			continue
 		}
-		scheme := "http"
+		scheme := discovery.SchemeHTTP
 		for _, t := range ing.Spec.TLS {
 			if len(t.Hosts) == 0 || slices.Contains(t.Hosts, rule.Host) {
-				scheme = "https"
+				scheme = discovery.SchemeHTTPS
 			}
 		}
 		for _, p := range rule.HTTP.Paths {
@@ -87,9 +87,9 @@ func addIngressRoute(obj map[string]any, add func(key, u string)) {
 	ns, _, _ := unstructured.NestedString(obj, "metadata", "namespace")
 	routes, _, _ := unstructured.NestedSlice(obj, "spec", "routes")
 	_, hasTLS, _ := unstructured.NestedFieldNoCopy(obj, "spec", "tls")
-	scheme := "http"
+	scheme := discovery.SchemeHTTP
 	if hasTLS {
-		scheme = "https"
+		scheme = discovery.SchemeHTTPS
 	}
 	for _, r := range routes {
 		route, ok := r.(map[string]any)

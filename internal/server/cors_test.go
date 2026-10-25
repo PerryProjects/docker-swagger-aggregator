@@ -40,9 +40,11 @@ func TestParseCORSOrigins(t *testing.T) {
 	if err != nil || !slices.Equal(got, []string{"https://app.example.com", "http://localhost:5173"}) {
 		t.Fatalf("got %v, %v", got, err)
 	}
-	for _, bad := range []string{"*", "null", "app.example.com", "https://app.example.com/", "https://app.example.com/x",
-		"https://*.example.com", "ftp://x.example.com", "https://user@app.example.com", "https://a.example.com?x=1"} {
-		if _, err := server.ParseCORSOrigins([]string{bad}); err == nil {
+	for _, bad := range []string{
+		"*", "null", "app.example.com", "https://app.example.com/", "https://app.example.com/x",
+		"https://*.example.com", "ftp://x.example.com", "https://user@app.example.com", "https://a.example.com?x=1",
+	} {
+		if _, parseErr := server.ParseCORSOrigins([]string{bad}); parseErr == nil {
 			t.Errorf("%q must be refused", bad)
 		}
 	}
@@ -54,7 +56,9 @@ func TestListedOriginGetsCredentialedCORSHeaders(t *testing.T) {
 	h := corsHandler(t, "https://app.example.com")
 	rec := do(h, http.MethodGet, "docs.example.com", map[string]string{"Origin": "https://app.example.com"})
 	if rec.Body.String() != "INNER" || rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example.com" ||
-		rec.Header().Get("Access-Control-Allow-Credentials") != "true" || !strings.Contains(rec.Header().Get("Vary"), "Origin") ||
+		rec.Header().
+			Get("Access-Control-Allow-Credentials") !=
+			"true" || !strings.Contains(rec.Header().Get("Vary"), "Origin") ||
 		!strings.Contains(rec.Header().Get("Access-Control-Expose-Headers"), "ETag") {
 		t.Fatalf("headers: %v body %q", rec.Header(), rec.Body)
 	}
@@ -70,7 +74,8 @@ func TestOtherOriginsGetNoCORSHeaders(t *testing.T) {
 	h := corsHandler(t, "https://app.example.com")
 	for _, origin := range []string{"https://evil.example", "http://app.example.com", "https://app.example.com.evil.example", "null"} {
 		rec := do(h, http.MethodGet, "docs.example.com", map[string]string{"Origin": origin})
-		if rec.Header().Get("Access-Control-Allow-Origin") != "" || rec.Header().Get("Access-Control-Allow-Credentials") != "" {
+		if rec.Header().Get("Access-Control-Allow-Origin") != "" ||
+			rec.Header().Get("Access-Control-Allow-Credentials") != "" {
 			t.Errorf("%s must get no CORS headers: %v", origin, rec.Header())
 		}
 	}
@@ -90,11 +95,17 @@ func TestPreflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, If-None-Match" {
 		t.Errorf("only the known headers are allowed, got %q", got)
 	}
-	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "PATCH") || rec.Header().Get("Access-Control-Max-Age") == "" ||
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "PATCH") ||
+		rec.Header().Get("Access-Control-Max-Age") == "" ||
 		rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
 		t.Errorf("preflight headers: %v", rec.Header())
 	}
-	rec = do(h, http.MethodOptions, "docs.example.com", map[string]string{"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+	rec = do(
+		h,
+		http.MethodOptions,
+		"docs.example.com",
+		map[string]string{"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
+	)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("a preflight from an unlisted origin: want 403, got %d", rec.Code)
 	}
@@ -111,11 +122,21 @@ func TestChangingRequestsFromUnlistedOriginsAreRefused(t *testing.T) {
 			t.Errorf("%s from an unlisted origin: want 403, got %d %q", method, rec.Code, rec.Body)
 		}
 	}
-	if rec := do(h, http.MethodPost, "docs.example.com", map[string]string{"Origin": "null"}); rec.Code != http.StatusForbidden {
+	if rec := do(
+		h,
+		http.MethodPost,
+		"docs.example.com",
+		map[string]string{"Origin": "null"},
+	); rec.Code != http.StatusForbidden {
 		t.Errorf("Origin: null must be refused, got %d", rec.Code)
 	}
 	// reads are not refused by the server (the browser keeps the answer from the page without CORS headers)
-	if rec := do(h, http.MethodGet, "docs.example.com", map[string]string{"Origin": "https://evil.example"}); rec.Code != http.StatusOK {
+	if rec := do(
+		h,
+		http.MethodGet,
+		"docs.example.com",
+		map[string]string{"Origin": "https://evil.example"},
+	); rec.Code != http.StatusOK {
 		t.Errorf("GET: %d", rec.Code)
 	}
 }
@@ -157,7 +178,9 @@ func TestCORSHeadersAlsoOnTheRefusalsOfTheLogin(t *testing.T) {
 	// the web handler puts CORS in front of the login, so a 401 reaches the frontend with readable headers
 	list, _ := server.ParseCORSOrigins([]string{"https://app.example.com"})
 	denyAll := func(http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login", http.StatusUnauthorized) })
+		return http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login", http.StatusUnauthorized) },
+		)
 	}
 	h := server.NewWebHandler(server.WebConfig{
 		UI: fstestUI(), API: mustURL("http://127.0.0.1:1"), Protect: denyAll, CORSOrigins: list,
@@ -166,7 +189,8 @@ func TestCORSHeadersAlsoOnTheRefusalsOfTheLogin(t *testing.T) {
 	req.Header.Set("Origin", "https://app.example.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized || rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example.com" {
+	if rec.Code != http.StatusUnauthorized ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example.com" {
 		t.Fatalf("a 401 must carry the CORS headers: %d %v", rec.Code, rec.Header())
 	}
 	pre := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)

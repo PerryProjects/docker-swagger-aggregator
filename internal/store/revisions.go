@@ -56,7 +56,9 @@ func (r *revisions) ReadRevisions(ctx context.Context) ([]*migrate.Revision, err
 }
 
 func (r *revisions) ReadRevision(ctx context.Context, version string) (*migrate.Revision, error) {
-	rev, err := scanRevision(r.db.QueryRowContext(ctx, `SELECT `+revisionColumns+` FROM `+revisionsTable+` WHERE version = ?`, version))
+	rev, err := scanRevision(
+		r.db.QueryRowContext(ctx, `SELECT `+revisionColumns+` FROM `+revisionsTable+` WHERE version = ?`, version),
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, migrate.ErrRevisionNotExist
 	}
@@ -68,9 +70,24 @@ func (r *revisions) WriteRevision(ctx context.Context, rev *migrate.Revision) er
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT OR REPLACE INTO `+revisionsTable+` (`+revisionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		rev.Version, rev.Description, int(rev.Type), rev.Applied, rev.Total, rev.ExecutedAt.UTC().Format(time.RFC3339Nano),
-		int64(rev.ExecutionTime), nullable(rev.Error), nullable(rev.ErrorStmt), rev.Hash, string(partial), rev.OperatorVersion)
+	_, err = r.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO `+revisionsTable+` (`+revisionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rev.Version,
+		rev.Description,
+		int(rev.Type),
+		rev.Applied,
+		rev.Total,
+		rev.ExecutedAt.UTC().Format(time.RFC3339Nano),
+		int64(
+			rev.ExecutionTime,
+		),
+		nullable(rev.Error),
+		nullable(rev.ErrorStmt),
+		rev.Hash,
+		string(partial),
+		rev.OperatorVersion,
+	)
 	return err
 }
 

@@ -451,7 +451,9 @@ func TestWebBasePathIsStrippedWhenPresent(t *testing.T) {
 func TestWebProtectCoversUIAPIAndProxiesButNotHealthz(t *testing.T) {
 	t.Parallel()
 
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("API")) }))
+	api := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("API")) }),
+	)
 	defer api.Close()
 	apiURL, _ := url.Parse(api.URL)
 	ui := fstest.MapFS{"index.html": {Data: []byte("INDEX")}}
@@ -493,7 +495,9 @@ func TestWebMCPSitsOutsideTheLoginProtection(t *testing.T) {
 	apiURL, _ := url.Parse("http://127.0.0.1:1")
 	ui := fstest.MapFS{"index.html": {Data: []byte("INDEX")}}
 	denyAll := func(http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login", http.StatusUnauthorized) })
+		return http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login", http.StatusUnauthorized) },
+		)
 	}
 	mcp := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("MCP")) })
 	h := server.NewWebHandler(server.WebConfig{UI: ui, API: apiURL, BasePath: "/docs", Protect: denyAll, MCP: mcp})
