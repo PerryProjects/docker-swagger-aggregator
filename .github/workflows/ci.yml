@@ -18,7 +18,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Every commit of the pull request is signed off (DCO)
@@ -35,7 +35,7 @@ jobs:
   go:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -52,7 +52,7 @@ jobs:
   vulncheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: stable
@@ -68,7 +68,7 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5 # the e2e tests of the built-in auth run the real Go web server
         with:
           go-version-file: go.mod
@@ -90,7 +90,7 @@ jobs:
   manifests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: kubectl kustomize deploy/kubernetes > /dev/null # the base renders
       - run: docker compose config -q # the default compose file is valid
       - run: AGGREGATOR_HOST=docs.example.com docker compose -f docker-compose.yml -f docker-compose.traefik.yml config -q
@@ -106,7 +106,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
       - id: meta
