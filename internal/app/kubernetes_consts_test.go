@@ -1,6 +1,6 @@
 //go:build !nokubernetes
 
-package app
+package app //nolint:testpackage // compares unexported constants of validate.go
 
 import (
 	"testing"

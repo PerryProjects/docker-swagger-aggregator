@@ -32,7 +32,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = ex.ExecuteN(ctx, 0); err != nil && err != migrate.ErrNoPendingFiles { //nolint:errorlint // sentinel returned as is
+	if err = ex.ExecuteN(
+		ctx,
+		0,
+	); err != nil &&
+		err != migrate.ErrNoPendingFiles { //nolint:errorlint // sentinel returned as is
 		return err
 	}
 	return nil
