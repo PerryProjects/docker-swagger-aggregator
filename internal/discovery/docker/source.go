@@ -34,7 +34,9 @@ const (
 // watchedActions are the container events the daemon is asked for. "health_status" is matched by
 // prefix daemon-side (the event is named "health_status: healthy"). handle checks again, so a
 // daemon that ignores the filter only costs traffic.
-var watchedActions = []string{"start", "die", "stop", "destroy", "health_status"}
+func watchedActions() []string {
+	return []string{"start", "die", "stop", "destroy", "health_status"}
+}
 
 // API is the part of the Docker client the source uses; *client.Client implements it.
 type API interface {
@@ -118,8 +120,10 @@ func (s *Source) session(ctx context.Context, h discovery.Handler) error {
 	// Subscribe before listing so nothing between the two is lost. Since is
 	// second-granular, so a few events may replay; Apply is idempotent.
 	ev := s.api.Events(ctx, client.EventsListOptions{
-		Since:   strconv.FormatInt(time.Now().Unix(), 10),
-		Filters: client.Filters{}.Add("type", "container").Add("label", s.enableFilter()).Add("event", watchedActions...),
+		Since: strconv.FormatInt(time.Now().Unix(), 10),
+		Filters: client.Filters{}.Add("type", "container").
+			Add("label", s.enableFilter()).
+			Add("event", watchedActions()...),
 	})
 
 	list, err := s.api.ContainerList(ctx, client.ContainerListOptions{
@@ -211,8 +215,15 @@ func (s *Source) toContainer(res client.ContainerInspectResult) (discovery.Conta
 	}
 
 	c := discovery.Container{
-		ID: i.ID, Name: t.Name, Source: SourceName, Replica: replicaKey(i.Config.Labels), Running: i.State.Running, ServerURL: t.ServerURL,
-		Group: t.Group, Order: t.Order, KeepServerPath: t.KeepServerPath,
+		ID:             i.ID,
+		Name:           t.Name,
+		Source:         SourceName,
+		Replica:        replicaKey(i.Config.Labels),
+		Running:        i.State.Running,
+		ServerURL:      t.ServerURL,
+		Group:          t.Group,
+		Order:          t.Order,
+		KeepServerPath: t.KeepServerPath,
 	}
 	if i.State.Health != nil && i.State.Health.Status != "none" {
 		c.Health = string(i.State.Health.Status)

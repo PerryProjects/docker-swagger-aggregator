@@ -12,7 +12,11 @@ import (
 )
 
 // maxSpecBytes bounds what the backend reads of one spec (the API itself limits specs to 10 MiB by default).
-const maxSpecBytes = 32 << 20
+const (
+	maxSpecBytes   = 32 << 20
+	maxErrorBody   = 256 // bytes of an error answer that go into the error message
+	requestTimeout = 15 * time.Second
+)
 
 // Service is what the API reports about a service (GET /api/services).
 type Service struct {
@@ -51,7 +55,7 @@ func (b HTTPBackend) client() *http.Client {
 	if b.Client != nil {
 		return b.Client
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	return &http.Client{Timeout: requestTimeout}
 }
 
 func (b HTTPBackend) get(ctx context.Context, path string) (*http.Response, error) {
@@ -89,7 +93,7 @@ func (b HTTPBackend) Spec(ctx context.Context, name string) ([]byte, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		if string(body) == "unknown service\n" {
 			return nil, ErrUnknown
 		}

@@ -48,7 +48,7 @@ go:
 
 lint:
   stage: test
-  image: golangci/golangci-lint:latest # .golangci.yml is a v2 config; pin a tag for reproducible lint
+  image: golangci/golangci-lint:v2.15.0 # the version .golangci.yml was written for; bump it on purpose
   script:
     - golangci-lint run ./...
 
