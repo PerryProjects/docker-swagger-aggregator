@@ -73,7 +73,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-node@v4 # vue-tsc (typecheck) needs Node, not the Bun runtime
+      - uses: actions/setup-node@v7 # vue-tsc (typecheck) needs Node, not the Bun runtime
         with:
           node-version: 24
       - run: bun install --frozen-lockfile
