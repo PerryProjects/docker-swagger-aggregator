@@ -44,7 +44,7 @@ jobs:
       # the small Docker-only API (no client-go) must keep building and passing
       - run: go vet -tags nokubernetes ./...
       - run: go test -tags nokubernetes -count=1 ./internal/app/ ./cmd/...
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0 # the version .golangci.yml was written for; bump it on purpose, not by accident
 
