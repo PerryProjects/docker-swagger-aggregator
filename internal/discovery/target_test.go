@@ -53,7 +53,13 @@ func TestParseTarget(t *testing.T) {
 			with(p+".port", "3000", p+".path", "docs/spec.yaml", p+".server-url", "https://api.example.com/v1"),
 			[]string{"x"},
 			nil,
-			discovery.Target{Name: "x", Port: 3000, Path: "/docs/spec.yaml", Scheme: "http", ServerURL: "https://api.example.com/v1"},
+			discovery.Target{
+				Name:      "x",
+				Port:      3000,
+				Path:      "/docs/spec.yaml",
+				Scheme:    "http",
+				ServerURL: "https://api.example.com/v1",
+			},
 			false,
 		},
 		{

@@ -23,7 +23,9 @@ const (
 	minTokenLen   = 32
 )
 
-var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+func httpMethods() []string {
+	return []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+}
 
 // NewServer registers the tools on a new MCP server.
 func NewServer(b Backend, version string) *mcp.Server {
@@ -34,7 +36,8 @@ func NewServer(b Backend, version string) *mcp.Server {
 	h := &handlers{b: b}
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: new(bool)} // reads this installation only
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "list_services", Annotations: ro,
+		Name:        "list_services",
+		Annotations: ro,
 		Description: "List the services this installation documents, with their status (up/down), group and the last problem. Start here.",
 	}, h.listServices)
 	mcp.AddTool(s, &mcp.Tool{
@@ -42,11 +45,13 @@ func NewServer(b Backend, version string) *mcp.Server {
 		Description: "List the operations (method, path, summary, tags) of one service. Cheaper than get_spec.",
 	}, h.listEndpoints)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "search_endpoints", Annotations: ro,
+		Name:        "search_endpoints",
+		Annotations: ro,
 		Description: "Search the operations of all services by a word in the service name, path, summary, description, operationId or tags.",
 	}, h.searchEndpoints)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "get_spec", Annotations: ro,
+		Name:        "get_spec",
+		Annotations: ro,
 		Description: "Return the complete OpenAPI/Swagger spec of one service as JSON. It can be large; prefer list_endpoints or search_endpoints first.",
 	}, h.getSpec)
 	return s
@@ -55,7 +60,10 @@ func NewServer(b Backend, version string) *mcp.Server {
 // Handler serves the MCP server over Streamable HTTP and requires "Authorization: Bearer <token>".
 func Handler(b Backend, version, token string) (http.Handler, error) {
 	if len(token) < minTokenLen {
-		return nil, fmt.Errorf("the MCP token must be at least %d characters (e.g. `openssl rand -base64 32`)", minTokenLen)
+		return nil, fmt.Errorf(
+			"the MCP token must be at least %d characters (e.g. `openssl rand -base64 32`)",
+			minTokenLen,
+		)
 	}
 	server := NewServer(b, version)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
@@ -80,22 +88,26 @@ func RequireToken(token string, next http.Handler) http.Handler {
 type handlers struct{ b Backend }
 
 type serviceInfo struct {
-	Name    string `json:"name" jsonschema:"service name, the key for the other tools"`
-	Status  string `json:"status" jsonschema:"up or down"`
+	Name    string `json:"name"              jsonschema:"service name, the key for the other tools"`
+	Status  string `json:"status"            jsonschema:"up or down"`
 	Group   string `json:"group,omitempty"`
-	Title   string `json:"title,omitempty" jsonschema:"info.title of the spec"`
+	Title   string `json:"title,omitempty"   jsonschema:"info.title of the spec"`
 	Version string `json:"version,omitempty" jsonschema:"info.version of the spec"`
 	// Endpoints is the number of operations in the spec: a hint of how big get_spec will be.
 	Endpoints int    `json:"endpoints,omitempty" jsonschema:"number of operations in the spec"`
-	HasSpec   bool   `json:"hasSpec" jsonschema:"false: the service never delivered a spec, the other tools cannot read it"`
-	Problem   string `json:"problem,omitempty" jsonschema:"last fetch or discovery problem"`
+	HasSpec   bool   `json:"hasSpec"             jsonschema:"false: the service never delivered a spec, the other tools cannot read it"`
+	Problem   string `json:"problem,omitempty"   jsonschema:"last fetch or discovery problem"`
 }
 
 type listServicesOut struct {
 	Services []serviceInfo `json:"services"`
 }
 
-func (h *handlers) listServices(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listServicesOut, error) {
+func (h *handlers) listServices(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	_ struct{},
+) (*mcp.CallToolResult, listServicesOut, error) {
 	svcs, err := h.b.Services(ctx)
 	if err != nil {
 		return nil, listServicesOut{}, err
@@ -114,7 +126,11 @@ type serviceIn struct {
 	Service string `json:"service" jsonschema:"service name as returned by list_services"`
 }
 
-func (h *handlers) getSpec(ctx context.Context, _ *mcp.CallToolRequest, in serviceIn) (*mcp.CallToolResult, any, error) {
+func (h *handlers) getSpec(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in serviceIn,
+) (*mcp.CallToolResult, any, error) {
 	spec, err := h.b.Spec(ctx, in.Service)
 	if err != nil {
 		return nil, nil, toolError(in.Service, err)
@@ -136,7 +152,11 @@ type listEndpointsOut struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 
-func (h *handlers) listEndpoints(ctx context.Context, _ *mcp.CallToolRequest, in serviceIn) (*mcp.CallToolResult, listEndpointsOut, error) {
+func (h *handlers) listEndpoints(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in serviceIn,
+) (*mcp.CallToolResult, listEndpointsOut, error) {
 	spec, err := h.b.Spec(ctx, in.Service)
 	if err != nil {
 		return nil, listEndpointsOut{}, toolError(in.Service, err)
@@ -163,7 +183,7 @@ func Endpoints(spec []byte) ([]Endpoint, error) {
 	slices.Sort(paths)
 	var out []Endpoint
 	for _, p := range paths {
-		for _, m := range httpMethods {
+		for _, m := range httpMethods() {
 			raw, ok := doc.Paths[p][m]
 			if !ok {
 				continue
@@ -187,23 +207,47 @@ func Endpoints(spec []byte) ([]Endpoint, error) {
 }
 
 type searchIn struct {
-	Query string `json:"query" jsonschema:"word or phrase to look for, case-insensitive"`
+	Query string `json:"query"           jsonschema:"word or phrase to look for, case-insensitive"`
 	Limit int    `json:"limit,omitempty" jsonschema:"maximum number of matches, default 25, at most 100"`
 }
 
 // Match is one search hit.
 type Match struct {
-	Service string `json:"service"`
 	Endpoint
+
+	Service string `json:"service"`
 }
 
 type searchOut struct {
 	Matches     []Match  `json:"matches"`
-	Truncated   bool     `json:"truncated,omitempty" jsonschema:"more matches exist than were returned"`
+	Truncated   bool     `json:"truncated,omitempty"   jsonschema:"more matches exist than were returned"`
 	Unavailable []string `json:"unavailable,omitempty" jsonschema:"services that could not be searched (no spec yet, or an error)"`
 }
 
-func (h *handlers) searchEndpoints(ctx context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, searchOut, error) {
+// searchService returns the endpoints of one service that match the lower-case query q.
+func (h *handlers) searchService(ctx context.Context, q, name string) ([]Match, error) {
+	spec, err := h.b.Spec(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	eps, err := Endpoints(spec)
+	if err != nil {
+		return nil, err
+	}
+	var out []Match
+	for _, e := range eps {
+		if matches(q, name, e) {
+			out = append(out, Match{Service: name, Endpoint: e})
+		}
+	}
+	return out, nil
+}
+
+func (h *handlers) searchEndpoints(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	in searchIn,
+) (*mcp.CallToolResult, searchOut, error) {
 	q := strings.ToLower(strings.TrimSpace(in.Query))
 	if q == "" {
 		return nil, searchOut{}, errors.New("query must not be empty")
@@ -226,27 +270,13 @@ func (h *handlers) searchEndpoints(ctx context.Context, _ *mcp.CallToolRequest, 
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, searchWorkers)
 	for i, s := range svcs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			spec, specErr := h.b.Spec(ctx, s.Name)
-			if specErr != nil {
-				results[i].failed = true
-				return
-			}
-			eps, epErr := Endpoints(spec)
-			if epErr != nil {
-				results[i].failed = true
-				return
-			}
-			for _, e := range eps {
-				if matches(q, s.Name, e) {
-					results[i].matches = append(results[i].matches, Match{Service: s.Name, Endpoint: e})
-				}
-			}
-		}()
+			var searchErr error
+			results[i].matches, searchErr = h.searchService(ctx, q, s.Name)
+			results[i].failed = searchErr != nil
+		})
 	}
 	wg.Wait()
 

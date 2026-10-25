@@ -328,14 +328,21 @@ func (r *Registry) representative(group []*entry) *entry {
 	return best
 }
 
+// The ranks of a replica, best last.
+const (
+	rankSpecOnly   = 1 // down, but a spec is cached
+	rankUp         = 2 // up, spec not fetched yet
+	rankUpWithSpec = 3
+)
+
 func rank(e *entry) int {
 	switch {
 	case e.svc.Status == status.Up && e.spec != nil:
-		return 3
+		return rankUpWithSpec
 	case e.svc.Status == status.Up:
-		return 2
+		return rankUp
 	case e.spec != nil:
-		return 1
+		return rankSpecOnly
 	}
 	return 0
 }
@@ -345,7 +352,7 @@ func better(a, b *entry) bool {
 	if ra, rb := rank(a), rank(b); ra != rb {
 		return ra > rb
 	}
-	if rank(a) < 2 {
+	if rank(a) < rankUp {
 		if seenAfter(a, b) {
 			return true
 		}
@@ -455,11 +462,13 @@ func shortID(id string) string {
 	return id
 }
 
-var operationMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+func operationMethods() []string {
+	return []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+}
 
 // specSummary reads what the status page shows of a (canonical JSON) spec: title, version, the OpenAPI/Swagger
 // version and the number of operations. It never fails: a spec that Prepare accepted can still have odd values.
-func specSummary(spec []byte) (title, version, openapi string, endpoints int) {
+func specSummary(spec []byte) (string, string, string, int) {
 	var doc struct {
 		OpenAPI string `json:"openapi"`
 		Swagger string `json:"swagger"`
@@ -472,16 +481,17 @@ func specSummary(spec []byte) (title, version, openapi string, endpoints int) {
 	if json.Unmarshal(spec, &doc) != nil {
 		return "", "", "", 0
 	}
-	openapi = doc.OpenAPI
+	openapi := doc.OpenAPI
 	if openapi == "" {
 		openapi = doc.Swagger
 	}
+	endpoints := 0
 	for _, item := range doc.Paths {
 		var ops map[string]json.RawMessage
 		if json.Unmarshal(item, &ops) != nil {
 			continue
 		}
-		for _, m := range operationMethods {
+		for _, m := range operationMethods() {
 			if _, ok := ops[m]; ok {
 				endpoints++
 			}

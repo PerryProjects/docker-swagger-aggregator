@@ -370,7 +370,8 @@ func TestSpecSummaryHealthAndSourceAreShown(t *testing.T) {
 	r.Upsert("sw", "c2", true, "none")
 	r.SetSpec("c2", []byte(`{"swagger":"2.0","info":{"title":"Old","version":"1.0"},"paths":{"/x":{"get":{}}}}`))
 	for _, s := range r.List() {
-		if s.Name == "sw" && (s.OpenAPI != "2.0" || s.Version != "1" && s.Version != "1.0" || s.Health != "" || s.Endpoints != 1) {
+		if s.Name == "sw" &&
+			(s.OpenAPI != "2.0" || s.Version != "1" && s.Version != "1.0" || s.Health != "" || s.Endpoints != 1) {
 			t.Fatalf("a Swagger 2.0 spec without a health check: %+v", s)
 		}
 	}

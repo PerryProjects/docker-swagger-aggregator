@@ -58,7 +58,8 @@ func TestDocumentsAreServedAsJSONAndYAML(t *testing.T) {
 	h := handler(t)
 	oa := loadJSON(t, h, "/spec/openapi.json")
 	aa := loadJSON(t, h, "/spec/asyncapi.json")
-	if oa["openapi"] != "3.2.0" || aa["asyncapi"] != "3.1.0" { // 3.2: itemSchema describes the events of a text/event-stream
+	if oa["openapi"] != "3.2.0" ||
+		aa["asyncapi"] != "3.1.0" { // 3.2: itemSchema describes the events of a text/event-stream
 		t.Fatalf("versions: %v %v", oa["openapi"], aa["asyncapi"])
 	}
 	for path, ct := range map[string]string{
@@ -104,7 +105,7 @@ func refs(v any, out *[]string) {
 
 func resolve(doc map[string]any, ref string) bool {
 	cur := any(doc)
-	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+	for part := range strings.SplitSeq(strings.TrimPrefix(ref, "#/"), "/") {
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return false
@@ -116,7 +117,7 @@ func resolve(doc map[string]any, ref string) bool {
 	return true
 }
 
-func TestEveryReferenceResolvesAndOperationIDsAreUnique(t *testing.T) {
+func TestEveryReferenceResolves(t *testing.T) {
 	t.Parallel()
 
 	h := handler(t)
@@ -133,6 +134,12 @@ func TestEveryReferenceResolvesAndOperationIDsAreUnique(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestOperationIDsAreUnique(t *testing.T) {
+	t.Parallel()
+
+	h := handler(t)
 	seen := map[string]bool{}
 	for path, item := range loadJSON(t, h, "/spec/openapi.json")["paths"].(map[string]any) { //nolint:forcetypeassert // test
 		for method, op := range item.(map[string]any) { //nolint:forcetypeassert // test
@@ -156,8 +163,8 @@ func TestEveryReferenceResolvesAndOperationIDsAreUnique(t *testing.T) {
 func jsonFields(v any) []string {
 	var out []string
 	rt := reflect.TypeOf(v)
-	for i := range rt.NumField() {
-		if name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+	for field := range rt.Fields() {
+		if name, _, _ := strings.Cut(field.Tag.Get("json"), ","); name != "" && name != "-" {
 			out = append(out, name)
 		}
 	}
@@ -186,7 +193,16 @@ func TestServiceSchemaMatchesWhatTheServerSends(t *testing.T) {
 		}
 	}
 	// the AsyncAPI User is the OpenAPI User
-	if a, b := props(loadJSON(t, h, "/spec/asyncapi.json"), "User"), props(loadJSON(t, h, "/spec/openapi.json"), "User"); !slices.Equal(a, b) {
+	if a, b := props(
+		loadJSON(t, h, "/spec/asyncapi.json"),
+		"User",
+	), props(
+		loadJSON(t, h, "/spec/openapi.json"),
+		"User",
+	); !slices.Equal(
+		a,
+		b,
+	) {
 		t.Errorf("User differs: asyncapi %v, openapi %v", a, b)
 	}
 }
@@ -212,7 +228,10 @@ func newLiveStack(t *testing.T) *liveStack {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	local, err := auth.NewLocal(auth.LocalConfig{
-		Store: db, SessionSecret: "0123456789abcdef0123456789abcdef-secret", SetupToken: "tok", BcryptCost: bcrypt.MinCost,
+		Store:         db,
+		SessionSecret: "0123456789abcdef0123456789abcdef-secret",
+		SetupToken:    "tok",
+		BcryptCost:    bcrypt.MinCost,
 	}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
@@ -270,19 +289,29 @@ func TestAuthSchemasMatchTheRealResponses(t *testing.T) {
 	s := newLiveStack(t)
 
 	var users []json.RawMessage
-	if err := json.Unmarshal(s.do(http.MethodGet, "/auth/users", "").Body.Bytes(), &users); err != nil || len(users) != 1 {
+	if err := json.Unmarshal(
+		s.do(http.MethodGet, "/auth/users", "").Body.Bytes(),
+		&users,
+	); err != nil ||
+		len(users) != 1 {
 		t.Fatalf("users: %v %d", err, len(users))
 	}
 	if got, want := keys(t, users[0]), props(oa, "User"); !slices.Equal(got, want) {
 		t.Errorf("User: the server sends %v, documented %v", got, want)
 	}
-	got := keys(t, s.do(http.MethodGet, "/auth/session", "").Body.Bytes())
-	for _, k := range got {
+	sessionKeys := keys(t, s.do(http.MethodGet, "/auth/session", "").Body.Bytes())
+	for _, k := range sessionKeys {
 		if !slices.Contains(props(oa, "SessionInfo"), k) {
 			t.Errorf("session answer has undocumented field %q", k)
 		}
 	}
-	if got := keys(t, s.do(http.MethodPost, "/auth/login", `{"username":"admin","password":"wrong-password"}`).Body.Bytes()); !slices.Equal(got, props(oa, "Error")) {
+	if got := keys(
+		t,
+		s.do(http.MethodPost, "/auth/login", `{"username":"admin","password":"wrong-password"}`).Body.Bytes(),
+	); !slices.Equal(
+		got,
+		props(oa, "Error"),
+	) {
 		t.Errorf("error body keys %v", got)
 	}
 }
@@ -294,7 +323,12 @@ func TestEveryDocumentedOperationExists(t *testing.T) {
 
 	oa := loadJSON(t, handler(t), "/spec/openapi.json")
 	s := newLiveStack(t)
-	skip := map[string]bool{"/api/events": true, "/auth/users/events": true, "/auth/logout": true, "/mcp": true} // streams never end (their behaviour is tested where they live); logout would end the session used below; /mcp only exists when enabled (checked below)
+	skip := map[string]bool{
+		"/api/events":        true,
+		"/auth/users/events": true,
+		"/auth/logout":       true,
+		"/mcp":               true,
+	} // streams never end (their behaviour is tested where they live); logout would end the session used below; /mcp only exists when enabled (checked below)
 	methods := []string{"get", "post", "put", "patch", "delete"}
 	n := 0
 	for path, item := range oa["paths"].(map[string]any) { //nolint:forcetypeassert // test
@@ -318,7 +352,13 @@ func TestEveryDocumentedOperationExists(t *testing.T) {
 			}
 			rec := s.do(strings.ToUpper(m), concrete, body)
 			if rec.Code == http.StatusMethodNotAllowed || strings.Contains(rec.Body.String(), "404 page not found") {
-				t.Errorf("%s %s is documented but not served (%d %q)", strings.ToUpper(m), path, rec.Code, strings.TrimSpace(rec.Body.String()))
+				t.Errorf(
+					"%s %s is documented but not served (%d %q)",
+					strings.ToUpper(m),
+					path,
+					rec.Code,
+					strings.TrimSpace(rec.Body.String()),
+				)
 			}
 			n++
 		}
@@ -351,7 +391,13 @@ func TestMCPDocumentationMatchesTheServer(t *testing.T) {
 	const both = "application/json, text/event-stream"
 	const list = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
 
-	if rec := call(http.MethodPost, "", both, list); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), `Bearer realm="swagger-aggregator"`) {
+	if rec := call(
+		http.MethodPost,
+		"",
+		both,
+		list,
+	); rec.Code != http.StatusUnauthorized ||
+		!strings.Contains(rec.Header().Get("WWW-Authenticate"), `Bearer realm="swagger-aggregator"`) {
 		t.Errorf("no token: %d %q", rec.Code, rec.Header().Get("WWW-Authenticate"))
 	}
 	if rec := call(http.MethodPost, mcpToken, "application/json", list); rec.Code != http.StatusBadRequest {
@@ -362,35 +408,43 @@ func TestMCPDocumentationMatchesTheServer(t *testing.T) {
 	}
 
 	rec := call(http.MethodPost, mcpToken, both, list)
-	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/event-stream" || !strings.HasPrefix(rec.Body.String(), "event: message\ndata: ") {
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/event-stream" ||
+		!strings.HasPrefix(rec.Body.String(), "event: message\ndata: ") {
 		t.Fatalf("tools/list: %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 	var resp struct {
 		Result struct {
-			Tools []struct{ Name string } `json:"tools"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
 		} `json:"result"`
 	}
 	data := strings.TrimPrefix(strings.SplitN(rec.Body.String(), "\n", 3)[1], "data: ")
 	if err := json.Unmarshal([]byte(data), &resp); err != nil {
 		t.Fatalf("the data line is no JSON-RPC response: %v: %q", err, data)
 	}
-	var real []string
+	var actual []string
 	for _, tool := range resp.Result.Tools {
-		real = append(real, tool.Name)
+		actual = append(actual, tool.Name)
 	}
-	slices.Sort(real)
+	slices.Sort(actual)
 	schema := oa["components"].(map[string]any)["schemas"].(map[string]any)["JsonRpcRequest"].(map[string]any) //nolint:forcetypeassert // test
 	var documented []string
 	for _, n := range schema["properties"].(map[string]any)["params"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any)["enum"].([]any) { //nolint:forcetypeassert // test
 		documented = append(documented, n.(string)) //nolint:forcetypeassert // test
 	}
 	slices.Sort(documented)
-	if !slices.Equal(real, documented) {
-		t.Errorf("the server offers tools %v, the document lists %v", real, documented)
+	if !slices.Equal(actual, documented) {
+		t.Errorf("the server offers tools %v, the document lists %v", actual, documented)
 	}
 
 	// a failed tool call is a 200 with isError, as documented
-	rec = call(http.MethodPost, mcpToken, both, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_spec","arguments":{"service":"nope"}}}`)
+	rec = call(
+		http.MethodPost,
+		mcpToken,
+		both,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_spec","arguments":{"service":"nope"}}}`,
+	)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isError":true`) {
 		t.Errorf("a failed tool call: %d %q", rec.Code, rec.Body.String())
 	}
@@ -414,7 +468,8 @@ func TestUserStreamMatchesTheDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" || resp.Header.Get("X-Accel-Buffering") != "no" {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" ||
+		resp.Header.Get("X-Accel-Buffering") != "no" {
 		t.Fatalf("%d %v", resp.StatusCode, resp.Header)
 	}
 	sc := bufio.NewScanner(resp.Body)

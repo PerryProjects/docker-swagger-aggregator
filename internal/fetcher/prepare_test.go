@@ -167,7 +167,8 @@ func TestRewritePathAndOperationServers(t *testing.T) {
 		return cur.([]any)[0].(map[string]any)["url"]
 	}
 	m := prep(t, spec, "https://api.example.com")
-	if urlAt(m, "paths", "/p") != "https://api.example.com" || urlAt(m, "paths", "/p", "get") != "https://api.example.com" {
+	if urlAt(m, "paths", "/p") != "https://api.example.com" ||
+		urlAt(m, "paths", "/p", "get") != "https://api.example.com" {
 		t.Fatalf("server-url: %v", m["paths"])
 	}
 	m = prep(t, spec, "", "/proxy/x")
