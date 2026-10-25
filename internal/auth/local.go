@@ -27,8 +27,11 @@ const (
 	maxPasswordLen = 72 // bcrypt ignores everything after 72 bytes; refusing is safer than silently truncating
 	maxBody        = 8 << 10
 	maxThrottle    = 30 * time.Second
-	throttleKeys   = 10_000 // purge bound of the in-memory failure table
-	setupKey       = "\x00setup"
+	// maxThrottleShift caps the doubling of the delay after repeated failures (base << 5 = 32 x base).
+	maxThrottleShift = 5
+	defaultHeartbeat = 15 * time.Second
+	throttleKeys     = 10_000 // purge bound of the in-memory failure table
+	setupKey         = "\x00setup"
 )
 
 var usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,63}$`)
@@ -132,7 +135,7 @@ func NewLocal(cfg LocalConfig, log *zap.Logger) (*Local, error) {
 		cfg.SessionTTL = defaultTTL
 	}
 	if cfg.Heartbeat <= 0 {
-		cfg.Heartbeat = 15 * time.Second
+		cfg.Heartbeat = defaultHeartbeat
 	}
 	if cfg.ThrottleBase <= 0 {
 		cfg.ThrottleBase = time.Second
@@ -161,32 +164,39 @@ func (l *Local) Bootstrap(ctx context.Context, adminUser, adminPassword, adminHa
 		return err
 	}
 	if adminUser != "" {
-		hash := adminHash
-		if hash == "" {
-			if err = validatePassword(adminPassword); err != nil {
-				return fmt.Errorf("admin password: %w", err)
-			}
-			if hash, err = l.hash(adminPassword); err != nil {
-				return err
-			}
-		} else if _, costErr := bcrypt.Cost([]byte(hash)); costErr != nil {
-			return errors.New("admin password hash is not a bcrypt hash")
-		}
-		name := strings.ToLower(adminUser)
-		if !usernameRe.MatchString(name) {
-			return fmt.Errorf("admin user %q: use 3-64 characters from a-z 0-9 . _ -", adminUser)
-		}
-		if _, err = l.cfg.Store.CreateFirstUser(ctx, name, hash, store.RoleAdmin); err != nil && !errors.Is(err, store.ErrNotEmpty) {
-			return err
-		}
-		l.log.Info("created the admin user from the environment", zap.String("user", name))
-		return nil
+		return l.createEnvAdmin(ctx, adminUser, adminPassword, adminHash)
 	}
 	if l.cfg.SetupToken == "" {
 		l.cfg.SetupToken = random()
 	}
 	l.log.Warn("no user exists yet: open the UI and register the first admin with the setup token",
 		zap.String("setupToken", l.cfg.SetupToken), zap.String("path", l.cfg.BasePath+"/"))
+	return nil
+}
+
+// createEnvAdmin creates the first admin from the environment's user and password (or bcrypt hash).
+func (l *Local) createEnvAdmin(ctx context.Context, adminUser, adminPassword, adminHash string) error {
+	hash := adminHash
+	if hash == "" {
+		if err := validatePassword(adminPassword); err != nil {
+			return fmt.Errorf("admin password: %w", err)
+		}
+		var err error
+		if hash, err = l.hash(adminPassword); err != nil {
+			return err
+		}
+	} else if _, err := bcrypt.Cost([]byte(hash)); err != nil {
+		return errors.New("admin password hash is not a bcrypt hash")
+	}
+	name := strings.ToLower(adminUser)
+	if !usernameRe.MatchString(name) {
+		return fmt.Errorf("admin user %q: use 3-64 characters from a-z 0-9 . _ -", adminUser)
+	}
+	if _, err := l.cfg.Store.CreateFirstUser(ctx, name, hash, store.RoleAdmin); err != nil &&
+		!errors.Is(err, store.ErrNotEmpty) {
+		return err
+	}
+	l.log.Info("created the admin user from the environment", zap.String("user", name))
 	return nil
 }
 
@@ -226,7 +236,7 @@ func (l *Local) Wrap(next http.Handler) http.Handler {
 			mux.ServeHTTP(w, r)
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			if _, ok := l.current(r); !ok {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
+				writeJSON(w, http.StatusUnauthorized, map[string]string{errorKey: errUnauthenticated})
 				return
 			}
 			w.Header().Set("Cache-Control", "private, no-store")
@@ -258,7 +268,7 @@ func (l *Local) requireUser(h func(http.ResponseWriter, *http.Request, store.Use
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, ok := l.current(r)
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{errorKey: errUnauthenticated})
 			return
 		}
 		h(w, r, u)
@@ -268,7 +278,7 @@ func (l *Local) requireUser(h func(http.ResponseWriter, *http.Request, store.Use
 func (l *Local) requireAdmin(h func(http.ResponseWriter, *http.Request, store.User)) http.HandlerFunc {
 	return l.requireUser(func(w http.ResponseWriter, r *http.Request, u store.User) {
 		if u.Role != store.RoleAdmin {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin only"})
+			writeJSON(w, http.StatusForbidden, map[string]string{errorKey: "admin only"})
 			return
 		}
 		h(w, r, u)
@@ -316,7 +326,7 @@ func (l *Local) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		l.failed(key)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "wrong username or password"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{errorKey: "wrong username or password"})
 		return
 	}
 	l.succeeded(key)
@@ -332,8 +342,9 @@ func (l *Local) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 type setupRequest struct {
-	Token string `json:"token"`
 	credentials
+
+	Token string `json:"token"`
 }
 
 func (l *Local) setup(w http.ResponseWriter, r *http.Request) {
@@ -351,12 +362,12 @@ func (l *Local) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > 0 {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "already set up"})
+		writeJSON(w, http.StatusConflict, map[string]string{errorKey: "already set up"})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(l.cfg.SetupToken)) != 1 || l.cfg.SetupToken == "" {
 		l.failed(setupKey)
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "wrong setup token"})
+		writeJSON(w, http.StatusForbidden, map[string]string{errorKey: "wrong setup token"})
 		return
 	}
 	name, hash, ok := l.validateNew(w, req.Username, req.Password)
@@ -365,7 +376,7 @@ func (l *Local) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := l.cfg.Store.CreateFirstUser(r.Context(), name, hash, store.RoleAdmin)
 	if errors.Is(err, store.ErrNotEmpty) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "already set up"})
+		writeJSON(w, http.StatusConflict, map[string]string{errorKey: "already set up"})
 		return
 	}
 	if err != nil {
@@ -380,15 +391,20 @@ func (l *Local) setup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// validateNew checks a new username and password; it writes the 400 itself.
-func (l *Local) validateNew(w http.ResponseWriter, username, password string) (name, hash string, ok bool) {
-	name = strings.ToLower(strings.TrimSpace(username))
+// validateNew checks a new username and password and returns the normalized name and the password hash;
+// it writes the 400 itself.
+func (l *Local) validateNew(w http.ResponseWriter, username, password string) (string, string, bool) {
+	name := strings.ToLower(strings.TrimSpace(username))
 	if !usernameRe.MatchString(name) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username: use 3-64 characters from a-z 0-9 . _ -"})
+		writeJSON(
+			w,
+			http.StatusBadRequest,
+			map[string]string{errorKey: "username: use 3-64 characters from a-z 0-9 . _ -"},
+		)
 		return "", "", false
 	}
 	if err := validatePassword(password); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password: " + err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "password: " + err.Error()})
 		return "", "", false
 	}
 	hash, err := l.hash(password)
@@ -410,11 +426,11 @@ func (l *Local) changeOwnPassword(w http.ResponseWriter, r *http.Request, u stor
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Current)) != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "current password is wrong"})
+		writeJSON(w, http.StatusForbidden, map[string]string{errorKey: "current password is wrong"})
 		return
 	}
 	if err := validatePassword(req.New); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password: " + err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "password: " + err.Error()})
 		return
 	}
 	hash, err := l.hash(req.New)
@@ -448,6 +464,25 @@ func (l *Local) listUsers(w http.ResponseWriter, r *http.Request, _ store.User) 
 // usersEvents streams the user list as Server-Sent Events: the whole list on connect and after every change, so the
 // user management page stays current when another admin (or another tab) changes something. It ends as soon as the
 // session behind it is no longer an admin's (signed out, demoted, disabled or deleted).
+// isAdmin reports whether the request still carries the session of an admin.
+func (l *Local) isAdmin(r *http.Request) bool {
+	u, ok := l.current(r)
+	return ok && u.Role == store.RoleAdmin
+}
+
+// usersJSON is the user list as the stream and the list endpoint send it.
+func (l *Local) usersJSON(ctx context.Context) ([]byte, error) {
+	us, err := l.cfg.Store.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]publicUser, len(us))
+	for i, u := range us {
+		out[i] = toPublic(u)
+	}
+	return json.Marshal(out)
+}
+
 func (l *Local) usersEvents(w http.ResponseWriter, r *http.Request, _ store.User) {
 	rc := http.NewResponseController(w)
 	h := w.Header()
@@ -458,18 +493,10 @@ func (l *Local) usersEvents(w http.ResponseWriter, r *http.Request, _ store.User
 	defer unsubscribe() // subscribe before the first snapshot: no change falls in between
 
 	send := func() bool {
-		if u, ok := l.current(r); !ok || u.Role != store.RoleAdmin {
+		if !l.isAdmin(r) {
 			return false
 		}
-		us, err := l.cfg.Store.ListUsers(r.Context())
-		if err != nil {
-			return false
-		}
-		out := make([]publicUser, len(us))
-		for i, u := range us {
-			out[i] = toPublic(u)
-		}
-		b, err := json.Marshal(out)
+		b, err := l.usersJSON(r.Context())
 		if err != nil {
 			return false
 		}
@@ -490,7 +517,7 @@ func (l *Local) usersEvents(w http.ResponseWriter, r *http.Request, _ store.User
 				return
 			}
 		case <-tick.C:
-			if u, ok := l.current(r); !ok || u.Role != store.RoleAdmin {
+			if !l.isAdmin(r) {
 				return
 			}
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil || rc.Flush() != nil {
@@ -502,6 +529,7 @@ func (l *Local) usersEvents(w http.ResponseWriter, r *http.Request, _ store.User
 
 type newUser struct {
 	credentials
+
 	Role string `json:"role"`
 }
 
@@ -514,7 +542,7 @@ func (l *Local) createUser(w http.ResponseWriter, r *http.Request, _ store.User)
 		req.Role = store.RoleUser
 	}
 	if !validRole(req.Role) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role must be admin or user"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "role must be admin or user"})
 		return
 	}
 	name, hash, ok := l.validateNew(w, req.Username, req.Password)
@@ -523,7 +551,7 @@ func (l *Local) createUser(w http.ResponseWriter, r *http.Request, _ store.User)
 	}
 	u, err := l.cfg.Store.CreateUser(r.Context(), name, hash, req.Role)
 	if errors.Is(err, store.ErrExists) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "username is taken"})
+		writeJSON(w, http.StatusConflict, map[string]string{errorKey: "username is taken"})
 		return
 	}
 	if err != nil {
@@ -553,7 +581,7 @@ func (l *Local) updateUser(w http.ResponseWriter, r *http.Request, actor store.U
 	var err error
 	if req.Role != nil {
 		if !validRole(*req.Role) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role must be admin or user"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "role must be admin or user"})
 			return
 		}
 		err = l.cfg.Store.SetRole(ctx, id, *req.Role)
@@ -563,7 +591,7 @@ func (l *Local) updateUser(w http.ResponseWriter, r *http.Request, actor store.U
 	}
 	if err == nil && req.Password != nil {
 		if perr := validatePassword(*req.Password); perr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password: " + perr.Error()})
+			writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "password: " + perr.Error()})
 			return
 		}
 		var hash string
@@ -594,7 +622,7 @@ func (l *Local) deleteUser(w http.ResponseWriter, r *http.Request, actor store.U
 		return
 	}
 	if id == actor.ID {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "you cannot delete yourself"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "you cannot delete yourself"})
 		return
 	}
 	if !l.storeError(w, l.cfg.Store.DeleteUser(r.Context(), id)) {
@@ -610,9 +638,9 @@ func (l *Local) storeError(w http.ResponseWriter, err error) bool {
 	case err == nil:
 		return true
 	case errors.Is(err, store.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{errorKey: "user not found"})
 	case errors.Is(err, store.ErrLastAdmin):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{errorKey: err.Error()})
 	default:
 		l.fail(w, err)
 	}
@@ -624,7 +652,7 @@ func (l *Local) fail(w http.ResponseWriter, err error) {
 		return // the browser gave up (navigated away): nobody is waiting for an answer, and it is no error
 	}
 	l.log.Error("auth request failed", zap.Error(err))
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+	writeJSON(w, http.StatusInternalServerError, map[string]string{errorKey: "internal error"})
 }
 
 // startSession sets the session cookie; false means a response was written.
@@ -645,9 +673,15 @@ func (l *Local) cookie(r *http.Request, value string, maxAge int) *http.Cookie {
 	if path == "" {
 		path = "/"
 	}
+	//nolint:gosec // Secure follows the connection (TLS or X-Forwarded-Proto), so plain-HTTP setups still work
 	return &http.Cookie{
-		Name: sessionCookie, Value: value, Path: path, MaxAge: maxAge, HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" || l.cfg.SameSite == http.SameSiteNoneMode,
+		Name:     sessionCookie,
+		Value:    value,
+		Path:     path,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == schemeHTTPS ||
+			l.cfg.SameSite == http.SameSiteNoneMode,
 		SameSite: sameSiteOrLax(l.cfg.SameSite),
 	}
 }
@@ -673,7 +707,7 @@ func (l *Local) failed(key string) {
 	}
 	f := l.failures[key]
 	f.count++
-	f.until = time.Now().Add(min(l.cfg.ThrottleBase<<min(f.count-1, 5), maxThrottle))
+	f.until = time.Now().Add(min(l.cfg.ThrottleBase<<min(f.count-1, maxThrottleShift), maxThrottle))
 	l.failures[key] = f
 }
 
@@ -685,7 +719,7 @@ func (l *Local) succeeded(key string) {
 
 func tooMany(w http.ResponseWriter, wait time.Duration) {
 	w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-	writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again shortly"})
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{errorKey: "too many attempts, try again shortly"})
 }
 
 func validRole(r string) bool { return r == store.RoleAdmin || r == store.RoleUser }
@@ -693,7 +727,7 @@ func validRole(r string) bool { return r == store.RoleAdmin || r == store.RoleUs
 func pathID(w http.ResponseWriter, r *http.Request) (uint, bool) {
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 32)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad user id"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "bad user id"})
 		return 0, false
 	}
 	return uint(id), true
@@ -703,16 +737,17 @@ func pathID(w http.ResponseWriter, r *http.Request) (uint, bool) {
 // cross-site HTML forms (on top of the SameSite cookie, and of the origin check when CORS is on).
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if ct := r.Header.Get("Content-Type"); ct != "application/json" && !strings.HasPrefix(ct, "application/json;") {
-		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content type must be application/json"})
+		writeJSON(
+			w,
+			http.StatusUnsupportedMediaType,
+			map[string]string{errorKey: "content type must be application/json"},
+		)
 		return false
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil || dec.More() {
-		if err == nil {
-			err = io.ErrUnexpectedEOF
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errorKey: "invalid request body"})
 		return false
 	}
 	return true

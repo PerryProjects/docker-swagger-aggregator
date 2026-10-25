@@ -21,6 +21,7 @@ type fakeBackend struct {
 }
 
 func (f fakeBackend) Services(context.Context) ([]mcptools.Service, error) { return f.services, nil }
+
 func (f fakeBackend) Spec(_ context.Context, name string) ([]byte, error) {
 	if s, ok := f.specs[name]; ok {
 		return []byte(s), nil
@@ -36,7 +37,15 @@ func (f fakeBackend) Spec(_ context.Context, name string) ([]byte, error) {
 func backend() fakeBackend {
 	return fakeBackend{
 		services: []mcptools.Service{
-			{Name: "orders", Status: "up", SpecHash: "a1", Group: "shop", Title: "Orders API", Version: "2", Endpoints: 3},
+			{
+				Name:      "orders",
+				Status:    "up",
+				SpecHash:  "a1",
+				Group:     "shop",
+				Title:     "Orders API",
+				Version:   "2",
+				Endpoints: 3,
+			},
 			{Name: "billing", Status: "down", SpecHash: "b1"},
 			{Name: "ghost", Status: "down", Error: "no network"},
 		},
@@ -166,8 +175,11 @@ func TestSearchEndpoints(t *testing.T) {
 	matches := out["matches"].([]any)                                             //nolint:forcetypeassert // test
 	var found []string
 	for _, m := range matches {
-		mm := m.(map[string]any)                                                                        //nolint:forcetypeassert // test
-		found = append(found, mm["service"].(string)+" "+mm["method"].(string)+" "+mm["path"].(string)) //nolint:forcetypeassert // test
+		mm := m.(map[string]any) //nolint:forcetypeassert // test
+		found = append(
+			found,
+			mm["service"].(string)+" "+mm["method"].(string)+" "+mm["path"].(string),
+		) //nolint:forcetypeassert // test
 	}
 	want := []string{"orders GET /orders/{id}", "billing GET /invoices"} // description of one, summary of the other
 	if len(found) != 2 || found[0] != want[0] || found[1] != want[1] {
@@ -204,9 +216,9 @@ func TestHTTPNeedsTheBearerToken(t *testing.T) {
 		if header != "" {
 			req.Header.Set("Authorization", header)
 		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
+		resp, doErr := http.DefaultClient.Do(req)
+		if doErr != nil {
+			t.Fatal(doErr)
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") == "" {

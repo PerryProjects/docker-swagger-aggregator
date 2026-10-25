@@ -46,7 +46,7 @@ jobs:
       - run: go test -tags nokubernetes -count=1 ./internal/app/ ./cmd/...
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest # .golangci.yml is a v2 config; pin a version once you want reproducible lint
+          version: v2.15.0 # the version .golangci.yml was written for; bump it on purpose, not by accident
 
   # Separate job with the newest Go: vulnerabilities in the standard library are fixed by the toolchain.
   vulncheck:
