@@ -13,6 +13,23 @@ default:
 variables:
   GOFLAGS: -mod=readonly
 
+dco: # every commit of a merge request is signed off (see CONTRIBUTING.md)
+  stage: test
+  image: alpine/git:latest
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - |
+      missing=0
+      for sha in $(git rev-list --no-merges "$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA"); do
+        if ! git log -1 --format=%B "$sha" | grep -Eiq '^Signed-off-by: .+ <.+@.+>$'; then
+          echo "commit $sha has no Signed-off-by line (git commit -s, see CONTRIBUTING.md)"; missing=1
+        fi
+      done
+      exit $missing
+
 go:
   stage: test
   image: golang:1.27 # has gcc, which -race needs

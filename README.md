@@ -4,6 +4,11 @@ A single Go service that discovers Docker containers labeled `swagger-aggregator
 fetches their OpenAPI/Swagger spec, and shows all of them in one [Scalar](https://scalar.com)
 UI with a live up/down marker per API. There is no runtime CDN dependency.
 
+> **Security:** there is **no login by default**. Anyone who can reach the web server can read all specs and use the
+> "Try it" proxy. Enable the [built-in login or OIDC](#authentication), or keep it on a private network. See
+> [SECURITY.md](SECURITY.md) for what to know and how to report a vulnerability, and [CONTRIBUTING.md](CONTRIBUTING.md)
+> (commits are signed off, DCO) if you want to contribute.
+
 Two small Go programs (one image):
 
 - `swagger-aggregator` – the API: discovery, spec fetching, SSE, and a reverse proxy for "Try it" calls.
