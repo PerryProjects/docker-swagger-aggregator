@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -27,6 +28,7 @@ const secret = "0123456789abcdef0123456789abcdef-secret"
 // idp is a minimal OIDC provider: discovery, keys and a token endpoint that checks PKCE and signs an ID token.
 type idp struct {
 	*httptest.Server
+
 	key *rsa.PrivateKey
 
 	mu     sync.Mutex
@@ -80,9 +82,7 @@ func (p *idp) token(w http.ResponseWriter, r *http.Request) {
 	iss, ok := p.codes[r.Form.Get("code")]
 	delete(p.codes, r.Form.Get("code")) // single use
 	extra := map[string]any{}
-	for k, v := range p.claims {
-		extra[k] = v
-	}
+	maps.Copy(extra, p.claims)
 	p.mu.Unlock()
 	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
 	if !ok || base64.RawURLEncoding.EncodeToString(sum[:]) != iss.challenge {
@@ -99,9 +99,7 @@ func (p *idp) token(w http.ResponseWriter, r *http.Request) {
 		"iss": p.URL, "sub": "user-1", "aud": "client-1", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
 		"nonce": iss.nonce,
 	}
-	for k, v := range extra {
-		claims[k] = v
-	}
+	maps.Copy(claims, extra)
 	raw, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		panic(err)
@@ -119,7 +117,8 @@ func (p *idp) authorize(t *testing.T, authURL string) string {
 		t.Fatalf("login must redirect to the provider, got %q", authURL)
 	}
 	q := u.Query()
-	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("nonce") == "" || q.Get("state") == "" {
+	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("nonce") == "" ||
+		q.Get("state") == "" {
 		t.Fatalf("authorization request lacks PKCE/nonce/state: %v", q)
 	}
 	code := "code-" + q.Get("state")
@@ -133,6 +132,7 @@ func (p *idp) authorize(t *testing.T, authURL string) string {
 
 type app struct {
 	*httptest.Server
+
 	idp *idp
 }
 
@@ -146,7 +146,9 @@ func newApp(t *testing.T, p *idp, mutate func(*auth.Config)) *app {
 	protected.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("INDEX")) })
 
 	var handler http.Handler
-	a.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
+	a.Server = httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }),
+	)
 	t.Cleanup(a.Close)
 
 	cfg := auth.Config{
@@ -178,7 +180,10 @@ func newApp(t *testing.T, p *idp, mutate func(*auth.Config)) *app {
 func browser(t *testing.T) *http.Client {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)
-	return &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{
+		Jar:           jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 func get(t *testing.T, c *http.Client, u string, accept string) *http.Response {
@@ -305,13 +310,43 @@ func TestAllowedGroupsAndEmails(t *testing.T) {
 		allow  bool
 	}{
 		{"no restriction", nil, nil, true},
-		{"group matches", func(c *auth.Config) { c.AllowedGroups = []string{"docs"} }, map[string]any{"groups": []string{"x", "docs"}}, true},
-		{"group missing", func(c *auth.Config) { c.AllowedGroups = []string{"docs"} }, map[string]any{"groups": []string{"x"}}, false},
+		{
+			"group matches",
+			func(c *auth.Config) { c.AllowedGroups = []string{"docs"} },
+			map[string]any{"groups": []string{"x", "docs"}},
+			true,
+		},
+		{
+			"group missing",
+			func(c *auth.Config) { c.AllowedGroups = []string{"docs"} },
+			map[string]any{"groups": []string{"x"}},
+			false,
+		},
 		{"no groups claim", func(c *auth.Config) { c.AllowedGroups = []string{"docs"} }, nil, false},
-		{"custom groups claim", func(c *auth.Config) { c.AllowedGroups = []string{"docs"}; c.GroupsClaim = "roles" }, map[string]any{"roles": []string{"docs"}}, true},
-		{"verified email matches", func(c *auth.Config) { c.AllowedEmails = []string{"A@Example.com"} }, map[string]any{"email": "a@example.com", "email_verified": true}, true},
-		{"unverified email is no proof", func(c *auth.Config) { c.AllowedEmails = []string{"a@example.com"} }, map[string]any{"email": "a@example.com", "email_verified": false}, false},
-		{"other email", func(c *auth.Config) { c.AllowedEmails = []string{"a@example.com"} }, map[string]any{"email": "b@example.com"}, false},
+		{
+			"custom groups claim",
+			func(c *auth.Config) { c.AllowedGroups = []string{"docs"}; c.GroupsClaim = "roles" },
+			map[string]any{"roles": []string{"docs"}},
+			true,
+		},
+		{
+			"verified email matches",
+			func(c *auth.Config) { c.AllowedEmails = []string{"A@Example.com"} },
+			map[string]any{"email": "a@example.com", "email_verified": true},
+			true,
+		},
+		{
+			"unverified email is no proof",
+			func(c *auth.Config) { c.AllowedEmails = []string{"a@example.com"} },
+			map[string]any{"email": "a@example.com", "email_verified": false},
+			false,
+		},
+		{
+			"other email",
+			func(c *auth.Config) { c.AllowedEmails = []string{"a@example.com"} },
+			map[string]any{"email": "b@example.com"},
+			false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

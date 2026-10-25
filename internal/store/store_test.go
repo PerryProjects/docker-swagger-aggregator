@@ -57,8 +57,8 @@ func TestUsernamesAreCaseInsensitiveAndUnique(t *testing.T) {
 	if _, err = s.CreateUser(ctx, "ALICE", "h", store.RoleUser); !errors.Is(err, store.ErrExists) {
 		t.Fatalf("duplicate must be refused, got %v", err)
 	}
-	if got, err := s.UserByName(ctx, "aLiCe"); err != nil || got.ID != u.ID {
-		t.Fatalf("lookup is case-insensitive: %+v, %v", got, err)
+	if got, lookupErr := s.UserByName(ctx, "aLiCe"); lookupErr != nil || got.ID != u.ID {
+		t.Fatalf("lookup is case-insensitive: %+v, %v", got, lookupErr)
 	}
 	if _, err = s.UserByName(ctx, "nobody"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
