@@ -130,9 +130,10 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          # No PrimeVue licence key here on purpose: the key ends up in the built JavaScript, and these images are published
+          # from a public repository. They show PrimeVue's "Invalid PrimeUI License" badge until you build with your own key.
           build-args: |
             KUBERNETES=${{ matrix.variant == 'full' }}
-            PRIMEVUE_LICENSE=${{ secrets.PRIMEVUE_LICENSE }}
           push: ${{ github.event_name != 'pull_request' }} # pull requests only prove that it builds
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

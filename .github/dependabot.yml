@@ -1,0 +1,21 @@
+# Dependency updates (and, separately, GitHub's security alerts). The web dependencies are not listed: the lockfile is
+# bun.lock, which Dependabot cannot update; they are updated by hand (bun update).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    groups:
+      # client-go, apimachinery, api and kube-openapi must move together (a mixed set does not compile)
+      kubernetes:
+        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+  - package-ecosystem: gomod
+    directory: /tools/migrate-gen
+    schedule: {interval: monthly}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /
+    schedule: {interval: weekly}

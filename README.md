@@ -561,7 +561,7 @@ still qualify. Whether *you* qualify is for you to check against [the licence](h
 - **The key is not in the repository** (the licence says it must not be published for others to use). It is given at build time:
   `VITE_PRIMEVUE_LICENSE` for `bun run dev` / `build` (put it in `web/.env.local`, which git ignores), and `PRIMEVUE_LICENSE` for the Docker
   build (`docker build --build-arg PRIMEVUE_LICENSE=...`; `docker compose` reads it from `PRIMEVUE_LICENSE` in a git-ignored `.env`). In CI set it
-  as a secret. Note that the key necessarily ends up **inside the built JavaScript**; the licence says it may and that it holds nothing sensitive.
+  as a secret for the tests (the images CI publishes are built *without* it). Note that the key necessarily ends up **inside the built JavaScript**; the licence says it may and that it holds nothing sensitive.
 - **Without a key everything works**, but PrimeVue logs a console warning and shows a small red *"Invalid PrimeUI License"* badge in the corner of
   the login, setup, status and users pages. So anyone who clones this repository and builds it needs their own key (or lives with the badge).
 - **The key expires** (the one in use here: 2027-10-24, plus a 30-day grace period). After that the badge appears until you renew it.

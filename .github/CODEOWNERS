@@ -1,0 +1,6 @@
+# Everything needs the maintainer's review; the paths below are the ones that decide what runs and what leaks.
+*                      @PerryProjects
+/.github/              @PerryProjects
+/Dockerfile            @PerryProjects
+/docker-compose*.yml   @PerryProjects
+/deploy/               @PerryProjects
