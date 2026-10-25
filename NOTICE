@@ -1,0 +1,12 @@
+swagger-aggregator
+Copyright 2026 The swagger-aggregator authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product bundles or depends on third-party software under their own licences
+(see go.mod and web/package.json). Most are permissive (Apache-2.0, MIT, BSD, ISC);
+hashicorp/hcl and lightningcss (a build tool) are MPL-2.0.
+
+Not Apache-2.0: the web UI is built with PrimeVue 5, which is under the PrimeUI
+licence and needs its own licence key. The Apache-2.0 licence of this project
+covers this project's code only; see README, "UI stack and licences".

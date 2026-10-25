@@ -656,3 +656,9 @@ A k3d cluster, by contrast, shows its nodes as ordinary containers in `docker ps
 - Last-known specs are kept only in memory: a stopped container that exists when the API restarts is listed as down *without* a spec.
 - `swagger-aggregator-web` must run in front of the API (or any reverse proxy that serves `/` from `web/dist` and `/api` from the API). Under a sub-path (`--base-path`) the proxy must forward that prefix to `swagger-aggregator-web`, which strips it itself.
 - `typescript` is aliased to `typescript-native-bridge` (a tsgo-backed TypeScript fork from the `johnsoncodehk/typescript-native-bridge` repo, pinned to an exact version): `vue-tsc` 3.3.13 does not work with TypeScript 7 yet ([vuejs/language-tools#6124](https://github.com/vuejs/language-tools/issues/6124)). Drop the alias once a `vue-tsc` release supports TypeScript 7. It is a third-party package with a native binary, used only for `bun run typecheck` (not part of the Docker image); the typecheck needs Node (it fails under `bun --bun`).
+
+## Licence
+
+[Apache License 2.0](LICENSE), see also [NOTICE](NOTICE). It covers the code of this repository. Third-party software keeps its own
+licence; in particular the web UI is built with PrimeVue 5 under the PrimeUI licence, which needs its own key and which this licence does
+not change (see [UI stack and licences](#ui-stack-and-licences)). Contributions are accepted under the same licence.
