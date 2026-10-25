@@ -384,7 +384,7 @@ func (s *Source) baseURL(svc *corev1.Service, port uint16, scheme string) string
 	if s.cfg.Access == AccessAPIServer {
 		// The service proxy addresses https backends as "https:<name>:<port>".
 		name := url.PathEscape(svc.Name) + ":" + p
-		if scheme == "https" {
+		if scheme == discovery.SchemeHTTPS {
 			name = "https:" + name
 		}
 		return strings.TrimRight(s.cfg.APIServer, "/") + "/api/v1/namespaces/" + url.PathEscape(svc.Namespace) +

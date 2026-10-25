@@ -23,6 +23,7 @@ const setupToken = "setup-token-for-tests"
 
 type localEnv struct {
 	*httptest.Server
+
 	store *store.Store
 	local *auth.Local
 }
@@ -93,9 +94,9 @@ func (c *client) do(method, path string, body any) (int, map[string]any) {
 	return resp.StatusCode, out
 }
 
-func (c *client) status(method, path string) int {
+func (c *client) status(path string) int {
 	c.t.Helper()
-	code, _ := c.do(method, path, nil)
+	code, _ := c.do(http.MethodGet, path, nil)
 	return code
 }
 
@@ -135,7 +136,7 @@ func TestSetupCreatesTheFirstAdminOnceWithTheToken(t *testing.T) {
 	if user["username"] != "admin" || user["role"] != "admin" || user["passwordHash"] != nil {
 		t.Fatalf("user: %v", user)
 	}
-	if c.status("GET", "/api/services") != 200 {
+	if c.status("/api/services") != 200 {
 		t.Fatal("setup signs the new admin in")
 	}
 	c.mustDo(http.StatusConflict, "POST", "/auth/setup", body) // closed for good
@@ -177,21 +178,21 @@ func TestAPIRequiresASessionButTheUIAndHealthzDoNot(t *testing.T) {
 	e := newLocal(t, true)
 	c := e.client(t)
 	for _, p := range []string{"/api/services", "/api/events", "/api/proxy/c1/x"} {
-		if code := c.status("GET", p); code != http.StatusUnauthorized {
+		if code := c.status(p); code != http.StatusUnauthorized {
 			t.Errorf("%s without a session: want 401, got %d", p, code)
 		}
 	}
 	for _, p := range []string{"/", "/status", "/assets/x.js", "/healthz"} {
-		if code := c.status("GET", p); code != http.StatusOK {
+		if code := c.status(p); code != http.StatusOK {
 			t.Errorf("%s must stay public (the login form lives in it), got %d", p, code)
 		}
 	}
 	c = e.admin(t)
-	if c.status("GET", "/api/services") != 200 {
+	if c.status("/api/services") != 200 {
 		t.Fatal("signed in: API reachable")
 	}
 	c.mustDo(http.StatusNoContent, "POST", "/auth/logout", nil)
-	if c.status("GET", "/api/services") != http.StatusUnauthorized {
+	if c.status("/api/services") != http.StatusUnauthorized {
 		t.Fatal("after logout: 401")
 	}
 }
@@ -201,15 +202,36 @@ func TestWrongPasswordsAreThrottledPerUsername(t *testing.T) {
 
 	e := newLocalWith(t, true, time.Minute)
 	admin := e.admin(t)
-	admin.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "carol", "password": "carol-password-1"})
+	admin.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "carol", "password": "carol-password-1"},
+	)
 
 	c := e.client(t)
 	c.mustDo(http.StatusUnauthorized, "POST", "/auth/login", map[string]any{"username": "carol", "password": "nope"})
-	c.mustDo(http.StatusTooManyRequests, "POST", "/auth/login", map[string]any{"username": "carol", "password": "carol-password-1"}) // delayed even with the right password
-	c.mustDo(http.StatusUnauthorized, "POST", "/auth/login", map[string]any{"username": "ghost", "password": "whatever-123"})        // unknown user: the same answer as a wrong password
+	c.mustDo(
+		http.StatusTooManyRequests,
+		"POST",
+		"/auth/login",
+		map[string]any{"username": "carol", "password": "carol-password-1"},
+	) // delayed even with the right password
+	c.mustDo(
+		http.StatusUnauthorized,
+		"POST",
+		"/auth/login",
+		map[string]any{"username": "ghost", "password": "whatever-123"},
+	) // unknown user: the same answer as a wrong password
 	// another username is not affected
-	admin.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "dora", "password": "dora-password-1"})
-	e.client(t).mustDo(http.StatusOK, "POST", "/auth/login", map[string]any{"username": "dora", "password": "dora-password-1"})
+	admin.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "dora", "password": "dora-password-1"},
+	)
+	e.client(t).
+		mustDo(http.StatusOK, "POST", "/auth/login", map[string]any{"username": "dora", "password": "dora-password-1"})
 }
 
 func TestDisabledUsersCannotLogInAndAreSignedOut(t *testing.T) {
@@ -217,20 +239,26 @@ func TestDisabledUsersCannotLogInAndAreSignedOut(t *testing.T) {
 
 	e := newLocal(t, true)
 	admin := e.admin(t)
-	admin.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "frank", "password": "frank-password-1"})
+	admin.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "frank", "password": "frank-password-1"},
+	)
 	frank := e.client(t)
 	frank.mustDo(200, "POST", "/auth/login", map[string]any{"username": "frank", "password": "frank-password-1"})
 
 	admin.mustDo(200, "PATCH", "/auth/users/"+userID(t, admin, "frank"), map[string]any{"disabled": true})
-	if frank.status("GET", "/api/services") != http.StatusUnauthorized {
+	if frank.status("/api/services") != http.StatusUnauthorized {
 		t.Fatal("a disabled user's session must end")
 	}
-	e.client(t).mustDo(http.StatusUnauthorized, "POST", "/auth/login", map[string]any{"username": "frank", "password": "frank-password-1"})
+	e.client(t).
+		mustDo(http.StatusUnauthorized, "POST", "/auth/login", map[string]any{"username": "frank", "password": "frank-password-1"})
 }
 
 func userID(t *testing.T, admin *client, name string) string {
 	t.Helper()
-	req, _ := http.NewRequest("GET", admin.e.URL+"/auth/users", nil)
+	req, _ := http.NewRequest(http.MethodGet, admin.e.URL+"/auth/users", nil)
 	resp, err := admin.c.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -254,20 +282,40 @@ func TestUserManagementIsAdminOnlyAndProtectsTheLastAdmin(t *testing.T) {
 
 	e := newLocal(t, true)
 	admin := e.admin(t)
-	admin.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "dave", "password": "dave-password-1", "role": "user"})
-	admin.mustDo(http.StatusConflict, "POST", "/auth/users", map[string]any{"username": "DAVE", "password": "dave-password-1"})
+	admin.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "dave", "password": "dave-password-1", "role": "user"},
+	)
+	admin.mustDo(
+		http.StatusConflict,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "DAVE", "password": "dave-password-1"},
+	)
 	admin.mustDo(http.StatusBadRequest, "POST", "/auth/users", map[string]any{"username": "erin", "password": "x"})
-	admin.mustDo(http.StatusBadRequest, "POST", "/auth/users", map[string]any{"username": "erin", "password": "erin-password-1", "role": "root"})
+	admin.mustDo(
+		http.StatusBadRequest,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "erin", "password": "erin-password-1", "role": "root"},
+	)
 
 	dave := e.client(t)
 	dave.mustDo(200, "POST", "/auth/login", map[string]any{"username": "dave", "password": "dave-password-1"})
-	if dave.status("GET", "/api/services") != 200 {
+	if dave.status("/api/services") != 200 {
 		t.Fatal("a plain user may use the docs")
 	}
-	if dave.status("GET", "/auth/users") != http.StatusForbidden {
+	if dave.status("/auth/users") != http.StatusForbidden {
 		t.Fatal("a plain user must not list users")
 	}
-	dave.mustDo(http.StatusForbidden, "POST", "/auth/users", map[string]any{"username": "x-user", "password": "password-123456"})
+	dave.mustDo(
+		http.StatusForbidden,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "x-user", "password": "password-123456"},
+	)
 
 	adminID := userID(t, admin, "admin")
 	admin.mustDo(http.StatusConflict, "PATCH", "/auth/users/"+adminID, map[string]any{"role": "user"}) // the last admin
@@ -276,7 +324,7 @@ func TestUserManagementIsAdminOnlyAndProtectsTheLastAdmin(t *testing.T) {
 	admin.mustDo(200, "PATCH", "/auth/users/"+daveID, map[string]any{"role": "admin"})
 	admin.mustDo(http.StatusNoContent, "DELETE", "/auth/users/"+daveID, nil)
 	admin.mustDo(http.StatusNotFound, "DELETE", "/auth/users/"+daveID, nil)
-	if dave.status("GET", "/api/services") != http.StatusUnauthorized {
+	if dave.status("/api/services") != http.StatusUnauthorized {
 		t.Fatal("a deleted user's session must end")
 	}
 }
@@ -289,12 +337,22 @@ func TestPasswordChangeEndsOtherSessionsButNotTheCurrentOne(t *testing.T) {
 	second := e.client(t)
 	second.mustDo(200, "POST", "/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"})
 
-	first.mustDo(http.StatusForbidden, "POST", "/auth/password", map[string]any{"current": "wrong", "new": "another long password"})
-	first.mustDo(http.StatusNoContent, "POST", "/auth/password", map[string]any{"current": "correct horse battery", "new": "another long password"})
-	if first.status("GET", "/api/services") != 200 {
+	first.mustDo(
+		http.StatusForbidden,
+		"POST",
+		"/auth/password",
+		map[string]any{"current": "wrong", "new": "another long password"},
+	)
+	first.mustDo(
+		http.StatusNoContent,
+		"POST",
+		"/auth/password",
+		map[string]any{"current": "correct horse battery", "new": "another long password"},
+	)
+	if first.status("/api/services") != 200 {
 		t.Fatal("the browser that changed the password stays signed in")
 	}
-	if second.status("GET", "/api/services") != http.StatusUnauthorized {
+	if second.status("/api/services") != http.StatusUnauthorized {
 		t.Fatal("other sessions must end")
 	}
 	fresh := e.client(t)
@@ -305,7 +363,7 @@ func TestMutationsNeedJSONAndSmallBodies(t *testing.T) {
 	t.Parallel()
 
 	e := newLocal(t, true)
-	req, _ := http.NewRequest("POST", e.URL+"/auth/login", strings.NewReader("username=a&password=b"))
+	req, _ := http.NewRequest(http.MethodPost, e.URL+"/auth/login", strings.NewReader("username=a&password=b"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded") // what a cross-site HTML form sends
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -316,7 +374,11 @@ func TestMutationsNeedJSONAndSmallBodies(t *testing.T) {
 		t.Fatalf("form post: want 415, got %d", resp.StatusCode)
 	}
 	big := strings.Repeat("a", 20<<10)
-	req, _ = http.NewRequest("POST", e.URL+"/auth/login", strings.NewReader(`{"username":"`+big+`","password":"x"}`))
+	req, _ = http.NewRequest(
+		http.MethodPost,
+		e.URL+"/auth/login",
+		strings.NewReader(`{"username":"`+big+`","password":"x"}`),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	resp, _ = http.DefaultClient.Do(req)
 	resp.Body.Close()
@@ -380,7 +442,11 @@ func TestSessionCookieSameSiteIsConfigurable(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = s.Close() })
 			l, err := auth.NewLocal(auth.LocalConfig{
-				Store: s, SessionSecret: secret, SetupToken: setupToken, BcryptCost: bcrypt.MinCost, SameSite: tc.sameSite,
+				Store:         s,
+				SessionSecret: secret,
+				SetupToken:    setupToken,
+				BcryptCost:    bcrypt.MinCost,
+				SameSite:      tc.sameSite,
 			}, zap.NewNop())
 			if err != nil {
 				t.Fatal(err)
@@ -397,17 +463,18 @@ func TestSessionCookieSameSiteIsConfigurable(t *testing.T) {
 			}
 			resp.Body.Close()
 			cookies := resp.Cookies()
-			if len(cookies) != 1 || cookies[0].SameSite != tc.want || cookies[0].Secure != tc.wantSecure || !cookies[0].HttpOnly {
+			if len(cookies) != 1 || cookies[0].SameSite != tc.want || cookies[0].Secure != tc.wantSecure ||
+				!cookies[0].HttpOnly {
 				t.Fatalf("session cookie: %+v", cookies)
 			}
 		})
 	}
 }
 
-// sse reads "event: x / data: y" blocks from a stream into a channel; it closes when the stream ends.
-func sse(t *testing.T, c *client, path string) (events <-chan [2]string, status int) {
+// sse reads "event: x / data: y" blocks from the user event stream into a channel; it closes when the stream ends.
+func sse(t *testing.T, c *client) (<-chan [2]string, int) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, c.e.URL+path, nil)
+	req, _ := http.NewRequest(http.MethodGet, c.e.URL+"/auth/users/events", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	resp, err := c.c.Do(req.WithContext(ctx))
@@ -454,30 +521,41 @@ func TestUserEventStreamIsAdminOnlyAndFollowsChanges(t *testing.T) {
 
 	e := newLocal(t, true)
 	admin := e.admin(t)
-	admin.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "gina", "password": "gina-password-1"})
+	admin.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "gina", "password": "gina-password-1"},
+	)
 
-	if _, status := sse(t, e.client(t), "/auth/users/events"); status != http.StatusUnauthorized {
+	if _, status := sse(t, e.client(t)); status != http.StatusUnauthorized {
 		t.Fatalf("no session: want 401, got %d", status)
 	}
 	gina := e.client(t)
 	gina.mustDo(200, "POST", "/auth/login", map[string]any{"username": "gina", "password": "gina-password-1"})
-	if _, status := sse(t, gina, "/auth/users/events"); status != http.StatusForbidden {
+	if _, status := sse(t, gina); status != http.StatusForbidden {
 		t.Fatalf("a plain user: want 403, got %d", status)
 	}
 
-	ch, status := sse(t, admin, "/auth/users/events")
+	ch, status := sse(t, admin)
 	if status != http.StatusOK {
 		t.Fatalf("admin: %d", status)
 	}
 	first, _ := next(t, ch)
-	if !strings.Contains(first, `"username":"admin"`) || !strings.Contains(first, `"username":"gina"`) || strings.Contains(first, "passwordHash") {
+	if !strings.Contains(first, `"username":"admin"`) || !strings.Contains(first, `"username":"gina"`) ||
+		strings.Contains(first, "passwordHash") {
 		t.Fatalf("the first event is the whole list: %s", first)
 	}
 
 	// another browser of the same admin changes something: the stream shows it
 	other := e.client(t)
 	other.mustDo(200, "POST", "/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"})
-	other.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "hank", "password": "hank-password-1"})
+	other.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "hank", "password": "hank-password-1"},
+	)
 	if ev, _ := next(t, ch); !strings.Contains(ev, `"username":"hank"`) {
 		t.Fatalf("created user missing: %s", ev)
 	}
@@ -496,10 +574,15 @@ func TestUserEventStreamEndsWhenTheAdminIsDemoted(t *testing.T) {
 
 	e := newLocal(t, true)
 	root := e.admin(t)
-	root.mustDo(http.StatusCreated, "POST", "/auth/users", map[string]any{"username": "ivy", "password": "ivy-password-12", "role": "admin"})
+	root.mustDo(
+		http.StatusCreated,
+		"POST",
+		"/auth/users",
+		map[string]any{"username": "ivy", "password": "ivy-password-12", "role": "admin"},
+	)
 	ivy := e.client(t)
 	ivy.mustDo(200, "POST", "/auth/login", map[string]any{"username": "ivy", "password": "ivy-password-12"})
-	ch, status := sse(t, ivy, "/auth/users/events")
+	ch, status := sse(t, ivy)
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
