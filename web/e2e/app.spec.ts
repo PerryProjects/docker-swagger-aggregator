@@ -144,6 +144,7 @@ test('the documentation has a navigation to the other pages', async ({ page }) =
   const nav = page.getByRole('navigation', { name: 'Main' })
   await expect(nav.getByRole('link', { name: 'Documentation' })).toHaveAttribute('aria-current', 'page')
   await expect(nav.getByRole('link', { name: 'API' })).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Events' })).toBeVisible() // the AsyncAPI document
   await expect(nav.getByRole('link', { name: 'Status' })).toBeVisible()
   await expect(nav.getByRole('link', { name: 'Users' })).toHaveCount(0) // auth=none has no users
 })
@@ -162,6 +163,19 @@ test('the API page shows the own API (REST, event streams, MCP) as OpenAPI and A
   expect(res.status()).toBe(200)
   expect(Object.keys((await res.json()).paths)).toEqual(expect.arrayContaining(['/api/events', '/auth/users/events', '/mcp']))
   expect((await (await page.request.get('/spec/asyncapi.json')).json()).asyncapi).toBe('3.1.0')
+})
+
+test('the Events menu entry opens the AsyncAPI document, the API entry the OpenAPI one', async ({ page }) => {
+  await page.goto('/')
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Events' }).click()
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator events' })).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Events' })).toHaveAttribute('aria-current', 'page')
+  await expect(nav.getByRole('link', { name: 'API' })).not.toHaveAttribute('aria-current', 'page')
+  await page.goto('/api-docs#events') // a direct link works too
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator events' })).toBeVisible()
+  await nav.getByRole('link', { name: 'API' }).click()
+  await expect(page.getByRole('heading', { name: 'Swagger Aggregator HTTP API' })).toBeVisible()
 })
 
 test('the documentation view loads no PrimeVue or Tailwind styles', async ({ page }) => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The navigation of the Scalar pages (documentation, API reference). Plain CSS on purpose: these pages must not
 // load PrimeVue or Tailwind. The PrimeVue pages have the same entries in their Menubar (shell/AppShell.vue).
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { BASE, route } from '../base'
 import { useSession } from '../composables/useSession'
 
@@ -9,17 +9,39 @@ const { session, logout } = useSession()
 const isAdmin = computed(() => session.value?.user?.role === 'admin')
 const builtIn = computed(() => session.value?.mode === 'build_in' && !!session.value.user)
 
+// The API page has two documents; the hash says which one is open (#events, #events/..., or #rest/...).
+const hash = ref(location.hash)
+const onHash = () => { hash.value = location.hash }
+const eventsOpen = computed(() => route === 'api' && hash.value.startsWith('#events'))
+const restOpen = computed(() => route === 'api' && !eventsOpen.value)
+
+// On the API page itself, a link that only changes the hash does not make Scalar switch documents: set the hash and
+// reload, so that Scalar opens the document the hash names. Elsewhere the link is a normal navigation.
+function openDocument(e: MouseEvent, target: '#rest' | '#events') {
+  if (route !== 'api') return
+  e.preventDefault()
+  history.replaceState(null, '', location.pathname + target)
+  location.reload()
+}
+
 // Scalar offsets its sticky sidebar and headings by this variable.
 const HEIGHT = '40px'
-onMounted(() => document.documentElement.style.setProperty('--scalar-custom-header-height', HEIGHT))
-onUnmounted(() => document.documentElement.style.removeProperty('--scalar-custom-header-height'))
+onMounted(() => {
+  document.documentElement.style.setProperty('--scalar-custom-header-height', HEIGHT)
+  window.addEventListener('hashchange', onHash)
+})
+onUnmounted(() => {
+  document.documentElement.style.removeProperty('--scalar-custom-header-height')
+  window.removeEventListener('hashchange', onHash)
+})
 </script>
 
 <template>
   <nav class="appnav" aria-label="Main">
     <strong class="brand">Swagger Aggregator</strong>
     <a :href="BASE" :aria-current="route === 'docs' ? 'page' : undefined">Documentation</a>
-    <a :href="`${BASE}api-docs`" :aria-current="route === 'api' ? 'page' : undefined">API</a>
+    <a :href="`${BASE}api-docs#rest`" :aria-current="restOpen ? 'page' : undefined" @click="openDocument($event, '#rest')">API</a>
+    <a :href="`${BASE}api-docs#events`" :aria-current="eventsOpen ? 'page' : undefined" title="The live event streams (AsyncAPI)" @click="openDocument($event, '#events')">Events</a>
     <a :href="`${BASE}status`">Status</a>
     <a v-if="isAdmin" :href="`${BASE}users`">Users</a>
     <span class="spacer" />
