@@ -183,7 +183,9 @@ func New(cfg Config, deps Deps) (*App, error) {
 func upstreamTransport(cfg Config) *http.Transport {
 	t := server.NewUpstreamTransport()
 	if cfg.InsecureUpstreamTLS {
-		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in, workload traffic only
+		t.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // opt-in (--insecure-upstream-tls) for workloads with self-signed certificates
+		}
 	}
 	return t
 }

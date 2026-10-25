@@ -18,19 +18,31 @@ func ParseCORSOrigins(in []string) ([]string, error) {
 			continue
 		}
 		u, err := url.Parse(o)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" ||
-			u.Fragment != "" || u.User != nil || strings.Contains(u.Host, "*") {
-			return nil, fmt.Errorf("%q is not an origin: use scheme://host[:port] (no path, no wildcard), e.g. https://app.example.com", o)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" ||
+			u.RawQuery != "" ||
+			u.Fragment != "" ||
+			u.User != nil ||
+			strings.Contains(u.Host, "*") {
+			return nil, fmt.Errorf(
+				"%q is not an origin: use scheme://host[:port] (no path, no wildcard), e.g. https://app.example.com",
+				o,
+			)
 		}
 		out = append(out, u.Scheme+"://"+u.Host)
 	}
 	return out, nil
 }
 
-// corsMethods and corsHeaders are what a preflight may ask for: nothing beyond what the UI itself uses.
+// corsMethods and corsHeaderAllowed are what a preflight may ask for: nothing beyond what the UI itself uses.
 const corsMethods = "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
 
-var corsHeaders = map[string]bool{"content-type": true, "accept": true, "if-none-match": true, "if-modified-since": true}
+func corsHeaderAllowed(name string) bool {
+	switch name {
+	case "content-type", "accept", "if-none-match", "if-modified-since":
+		return true
+	}
+	return false
+}
 
 // CORS lets browsers on the listed origins use the interface with the session cookie (credentials), and protects it
 // from the others. origins must come from ParseCORSOrigins; nil means "same origin only": the middleware does nothing.
@@ -68,7 +80,10 @@ func CORS(origins []string) func(http.Handler) http.Handler {
 				if preflight {
 					h.Add("Vary", "Access-Control-Request-Headers")
 					h.Set("Access-Control-Allow-Methods", corsMethods)
-					h.Set("Access-Control-Allow-Headers", allowedRequestHeaders(r.Header.Get("Access-Control-Request-Headers")))
+					h.Set(
+						"Access-Control-Allow-Headers",
+						allowedRequestHeaders(r.Header.Get("Access-Control-Request-Headers")),
+					)
 					h.Set("Access-Control-Max-Age", "600")
 					w.WriteHeader(http.StatusNoContent)
 					return
@@ -79,7 +94,9 @@ func CORS(origins []string) func(http.Handler) http.Handler {
 			case unsafeMethod(r.Method) && !sameOrigin(r, origin):
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
-				_, _ = w.Write([]byte(`{"error":"cross-origin request refused: the origin is not in the CORS list"}` + "\n"))
+				_, _ = w.Write(
+					[]byte(`{"error":"cross-origin request refused: the origin is not in the CORS list"}` + "\n"),
+				)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -108,8 +125,8 @@ func sameOrigin(r *http.Request, origin string) bool {
 // allowedRequestHeaders echoes the requested headers that are on the list; others are left out and so blocked.
 func allowedRequestHeaders(requested string) string {
 	var out []string
-	for _, name := range strings.Split(requested, ",") {
-		if name = strings.TrimSpace(name); corsHeaders[strings.ToLower(name)] {
+	for name := range strings.SplitSeq(requested, ",") {
+		if name = strings.TrimSpace(name); corsHeaderAllowed(strings.ToLower(name)) {
 			out = append(out, name)
 		}
 	}
